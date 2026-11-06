@@ -1,0 +1,48 @@
+{
+  "name": "@ofis/tsorm",
+  "version": "0.15.0",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./adapters": "./dist/adapters/index.js",
+    "./schema": "./dist/schema/index.js",
+    "./migrations": "./dist/migrations/index.js",
+    "./adapters/sqlite": "./dist/adapters/sqlite.js",
+    "./adapters/mysql": "./dist/adapters/mysql.js",
+    "./adapters/postgres": "./dist/adapters/postgres.js"
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "generate": "bun scripts/generate.ts",
+    "check": "bun scripts/check.ts",
+    "test": "bun test --timeout=30000",
+    "example": "bun scripts/example.ts",
+    "clean": "bun scripts/clean.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs"
+  },
+  "devDependencies": {
+    "@types/bun": "~1.4.4",
+    "@types/pg": "~8.23.1",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "~4.1.0",
+    "typescript": "~6.0.3",
+    "vitepress": "2.0.0-alpha.21"
+  },
+  "trustedDependencies": [
+    "@vscode/vsce-sign"
+  ],
+  "bin": {
+    "tsorm": "./dist/cli.js"
+  },
+  "dependencies": {
+    "mariadb": "~3.5.5",
+    "pg": "~8.23.1"
+  }
+}

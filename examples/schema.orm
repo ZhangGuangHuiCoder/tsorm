@@ -1,0 +1,54 @@
+model User {
+  id: int @id @auto
+  email: string(191) @unique
+  name?: string
+  posts: Post[] @via(author)
+  profile?: Profile @via(user)
+}
+
+model Post {
+  id: int @id @auto
+  title: string
+  published: boolean = false
+  views: int = 0
+  createdAt: date = now()
+  author: User
+  reviewer?: User
+  tags: Tag[]
+}
+
+model Profile {
+  id: int @id @auto
+  bio: string = ""
+  user: User @unique
+}
+
+model Tag {
+  id: int @id @auto
+  name: string(191) @unique
+  posts: Post[] @via(tags)
+}
+
+type Preferences = {
+  theme: "light" | "dark"
+  notifications: boolean
+  languages: string[]
+}
+
+model Account {
+  id: int @id @auto
+  email: string(191) @unique
+  name?: string
+  preferences?: json < Preferences >
+  deletedAt?: date
+  entries: AccountEntry[] @via(account)
+  @@softDelete(deletedAt)
+}
+
+model AccountEntry {
+  id: int @id @auto
+  title: string
+  account: Account
+  deletedAt?: date
+  @@softDelete(deletedAt)
+}
