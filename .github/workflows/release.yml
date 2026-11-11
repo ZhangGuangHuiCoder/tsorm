@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.x
+          github-token: ${{ github.token }}
+
+      # 构建 ORM、扩展与文档，再用四种数据库测试；失败时输出容器日志
+      - name: Build & Test
+        env:
+          DOCS_BASE: /${{ github.event.repository.name }}/
+          TEST_DATABASES: sqlite,postgres,mysql,mariadb
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          docker compose -f examples/compose.yaml up -d --wait
+          bun test || { docker compose -f examples/compose.yaml logs --no-color; exit 1; }
+
+      # 发布 npm 包与 GitHub Release（附构建产物 artifacts/ 下的 VS Code 扩展）；已存在的版本与 Release 跳过，资产用 --clobber 覆盖，保证重跑幂等（bun publish 读取 NPM_CONFIG_TOKEN）
+      - name: Publish
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun pm view "@ofis/tsorm@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1 || bun publish
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" artifacts/tsorm-vscode.vsix --clobber
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+      - name: Deploy docs
+        uses: actions/deploy-pages@v4

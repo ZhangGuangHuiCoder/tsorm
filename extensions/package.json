@@ -1,0 +1,45 @@
+{
+  "name": "tsorm",
+  "displayName": "TSORM",
+  "version": "0.0.0",
+  "description": "Language support for TSORM schemas",
+  "categories": [
+    "Formatters",
+    "Programming Languages"
+  ],
+  "license": "Apache-2.0",
+  "publisher": "ofis",
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "languages": [
+      {
+        "id": "tsorm",
+        "aliases": [
+          "TSORM",
+          "orm"
+        ],
+        "extensions": [
+          ".orm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tsorm",
+        "scopeName": "source.orm",
+        "path": "./syntaxes/orm.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[tsorm]": {
+        "editor.defaultFormatter": "ofis.tsorm",
+        "editor.tabSize": 2
+      }
+    }
+  },
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  }
+}

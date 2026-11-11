@@ -1,0 +1,138 @@
+// 测试用模型，覆盖常见关联与特性场景：一对多、一对一、多对多、自关联、
+// 复合键、参照动作、软删除、类型化 JSON、枚举、多态（morph）以及全部标量类型。
+// 修改后运行 `bun run example`（不带数据库参数）重新生成 test/fixtures/client.ts。
+
+model User {
+  id: int @id @auto
+  email: string @unique
+  name?: string
+  role: "admin" | "member" = "member"
+  age?: int
+  createdAt: datetime = now()
+  updatedAt: datetime @updatedAt
+  posts: Post[] @via(author)
+  reviewed: Post[] @via(reviewer)
+  profile?: Profile @via(user)
+  comments: Comment[] @via(author)
+  following: User[]
+  followers: User[] @via(following)
+  attachments: Attachment[] @via(owner)
+}
+
+model Profile {
+  id: int @id @auto
+  bio: string = ""
+  user: User @unique @relation(onDelete: Cascade)
+}
+
+model Post {
+  id: int @id @auto
+  title: string(200)
+  content?: text
+  published: boolean = false
+  views: int = 0
+  rating?: number
+  createdAt: datetime = now()
+  author: User @relation(onDelete: Cascade)
+  reviewer?: User @relation(onDelete: SetNull)
+  tags: Tag[]
+  comments: Comment[] @via(post)
+  attachments: Attachment[] @via(owner)
+  notes: Note[] @via(holder)
+
+  @@index(published)
+}
+
+model Comment {
+  id: int @id @auto
+  body: string
+  post: Post @relation(onDelete: Cascade)
+  author: User @relation(onDelete: Cascade)
+}
+
+model Tag {
+  id: int @id @auto
+  name: string(64) @unique
+  posts: Post[] @via(tags)
+}
+
+model Category {
+  id: int @id @auto
+  name: string(64)
+  parent?: Category @relation(onDelete: SetNull)
+  children: Category[] @via(parent)
+}
+
+model Membership {
+  organization: string(64)
+  email: string
+  level: int = 1
+
+  @@id(organization, email)
+}
+
+model Product {
+  id: string(36) = uuid() @id
+  sku: string(32) @unique @map("product_sku")
+  price: decimal(10, 2)
+  stock: bigint = 0
+  payload?: bytes
+  active: boolean = true
+
+  @@map("products")
+}
+
+model Slot {
+  id: int @id @auto
+  owner: string(64)
+  slot: int
+
+  @@unique(owner, slot)
+}
+
+type Settings = {
+  theme: "light" | "dark"
+  notifications: boolean
+  tags: string[]
+  score?: number
+}
+
+model Account {
+  id: int @id @auto
+  email: string @unique
+  name?: string
+  settings?: json<Settings>
+  entries: Entry[] @via(account)
+
+  @@softDelete()
+}
+
+model Entry {
+  id: int @id @auto
+  title: string
+  account: Account
+  deletedAt?: datetime
+
+  @@softDelete(deletedAt)
+}
+
+// 显式 morph：判别列用枚举限定拥有方集合，两列绑定到已有标量字段。
+model Attachment {
+  id: int @id @auto
+  name: string
+  ownerType: "Post" | "User"
+  ownerId: int
+  owner: morph(ownerType, ownerId)
+  deletedAt?: datetime
+
+  @@softDelete(deletedAt)
+}
+
+// 隐式 morph：判别列与主键列自动生成为 holderType/holderId，可直接索引。
+model Note {
+  id: int @id @auto 
+  body: string 
+  holder: morph
+
+  @@index(holderType, holderId)
+}

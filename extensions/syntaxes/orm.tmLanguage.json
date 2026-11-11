@@ -1,0 +1,97 @@
+{
+  "scopeName": "source.orm",
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.orm",
+      "begin": "//",
+      "end": "$"
+    },
+    {
+      "name": "comment.block.orm",
+      "begin": "/\\*",
+      "end": "\\*/"
+    },
+    {
+      "name": "string.quoted.double.orm",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.orm",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "match": "\\b(model|type)\\s+([A-Za-z_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.orm"
+        },
+        "2": {
+          "name": "entity.name.type.orm"
+        }
+      }
+    },
+    {
+      "name": "storage.modifier.orm",
+      "match": "@@?\\b(id|auto|unique|updatedAt|map|via|relation|index|softDelete)\\b"
+    },
+    {
+      "comment": "@relation(field: x) 的值是本模型的列名，不是类型。",
+      "match": "\\b(field)\\s*(:)\\s*([A-Za-z_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.orm"
+        },
+        "2": {
+          "name": "punctuation.orm"
+        },
+        "3": {
+          "name": "variable.other.property.orm"
+        }
+      }
+    },
+    {
+      "name": "variable.other.property.orm",
+      "match": "\\b[A-Za-z_$][\\w$]*(?=\\??\\s*:)",
+      "comment": "字段名先于类型关键字匹配，datetime、string 之类的字段名不会被当成类型。"
+    },
+    {
+      "comment": "冒号后的类型名；外键动作和字面量交给常量规则。",
+      "match": "(:)\\s*(?!(?:Cascade|Restrict|NoAction|SetNull|true|false|null)\\b)(?!(?:int|bigint|number|decimal|string|text|boolean|datetime|timestamp|json|bytes|Record|morph)\\b)([A-Za-z_$][\\w$]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.orm"
+        },
+        "2": {
+          "name": "entity.name.type.orm"
+        }
+      }
+    },
+    {
+      "name": "storage.type.orm",
+      "match": "\\b(int|bigint|number|decimal|string|text|boolean|datetime|timestamp|json|bytes|Record|morph)\\b"
+    },
+    {
+      "name": "constant.language.orm",
+      "match": "\\b(Cascade|Restrict|NoAction|SetNull|true|false|null)\\b"
+    },
+    {
+      "name": "entity.name.function.orm",
+      "match": "\\b(now|uuid)(?=\\s*\\()"
+    },
+    {
+      "name": "constant.numeric.orm",
+      "match": "-?\\b\\d+(?:\\.\\d+)?\\b"
+    },
+    {
+      "name": "entity.name.type.orm",
+      "match": "(?<=<)\\s*(?!(?:string|number|boolean|null|Record)\\b)[A-Za-z_$][\\w$]*"
+    },
+    {
+      "name": "punctuation.orm",
+      "match": "[<>{}\\[\\]():;,@?=|.]"
+    }
+  ]
+}

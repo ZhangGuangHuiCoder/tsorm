@@ -1,0 +1,114 @@
+---
+description: 安装 TSORM，定义第一个模型，生成客户端并执行查询。
+---
+
+# 快速开始
+
+本教程使用 SQLite，依次完成模型定义、客户端生成、数据写入与查询。
+
+## 前提条件
+
+- Node.js 22.15 及以上，支持所有在维护的 LTS 版本
+- 本教程使用 SQLite，无需额外安装；换用其他数据库时最低要求 MySQL 8.0.16、MariaDB 10.6、PostgreSQL 14
+
+## 安装
+
+::: code-group
+
+```bash [npm]
+npm install @ofis/tsorm
+```
+
+```bash [pnpm]
+pnpm add @ofis/tsorm
+```
+
+```bash [yarn]
+yarn add @ofis/tsorm
+```
+
+```bash [bun]
+bun add @ofis/tsorm
+```
+
+:::
+
+MySQL 的 `mariadb` 与 PostgreSQL 的 `pg` 客户端随包安装，SQLite 使用 Node.js 内置的 `node:sqlite`。
+
+安装后提供 `tsorm` 命令，用法见 [CLI](../reference/cli/overview.md)。
+
+## 定义模型
+
+创建 `schema.orm`：
+
+```ts
+model User {
+  id: int @id @auto
+  email: string @unique
+  name?: string
+  posts: Post[] @via(author)
+}
+
+model Post {
+  id: int @id @auto
+  title: string
+  published: boolean = false
+  createdAt: datetime = now()
+  author: User
+}
+```
+
+`Post.author` 会自动生成外键字段 `authorId`。`User.posts` 通过 `@via(author)` 指向对应的关系，不需要重复定义外键。
+
+## 生成客户端
+
+```bash
+tsorm generate --schema schema.orm --out generated/client.ts
+```
+
+## 写入和查询
+
+创建 `main.ts`：
+
+```ts
+import { createClient } from "./generated/client.ts";
+import { sqlite } from "@ofis/tsorm/adapters/sqlite";
+
+const db = await createClient({
+  adapter: sqlite({ connection: "file:./app.sqlite", initialize: true }),
+  timezone: "+08:00",
+});
+
+try {
+  await db.user.create({
+    data: {
+      email: "alice@example.com",
+      posts: { create: { title: "Hello ORM" } },
+    },
+  });
+
+  const users = await db.user.findMany({
+    where: { posts: { some: { published: false } } },
+    include: { posts: { take: 3, orderBy: { id: "desc" } } },
+  });
+  console.log(users);
+} finally {
+  await db.$close();
+}
+```
+
+运行：
+
+```bash
+node main.ts
+```
+
+::: warning 再次运行前
+`initialize: true` 只用于创建新数据库。再次连接同一个 `app.sqlite` 时要去掉该选项，否则适配器将返回 `DATABASE_NOT_EMPTY`。正式项目请改用[版本化迁移](../databases/migrations.md)管理结构。
+:::
+
+## 下一步
+
+- [模型定义](../schema/overview.md)：字段类型、关系和约束
+- [新增](../client/create.md)、[查询](../client/queries.md)、[更新](../client/update.md)、[删除](../client/delete.md)：客户端的核心操作
+- [完整示例](./examples.md)：运行覆盖三种数据库的示例项目

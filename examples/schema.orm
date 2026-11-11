@@ -1,0 +1,106 @@
+// 特性示例：关联动作、自关联（树 + 多对多）、显式与隐式多态、复合唯一键、
+// 索引、名称映射、uuid 主键、常用标量、类型化 JSON 与软删除。
+
+model User {
+  id: int @id @auto
+  email: string @unique
+  name?: string
+  role: "admin" | "member" = "member"
+  createdAt: datetime = now()
+  updatedAt: datetime @updatedAt
+  posts: Post[] @via(author)
+  profile?: Profile @via(user)
+  following: User[]
+  followers: User[] @via(following)
+  attachments: Attachment[] @via(owner)
+}
+
+model Post {
+  id: int @id @auto
+  title: string(200)
+  body?: text
+  published: boolean = false
+  views: int = 0
+  author: User @relation(onDelete: Cascade)
+  tags: Tag[]
+  attachments: Attachment[] @via(owner)
+  notes: Note[] @via(holder)
+  @@index(published)
+}
+
+model Profile {
+  id: int @id @auto
+  bio: string = ""
+  user: User @unique @relation(onDelete: Cascade)
+}
+
+model Tag {
+  id: int @id @auto
+  name: string @unique
+}
+
+// 自关联树：父可空，父删除时子记录升到根级。
+model Category {
+  id: int @id @auto
+  name: string(64)
+  parent?: Category @relation(onDelete: SetNull)
+  children: Category[] @via(parent)
+}
+
+// 复合唯一键：整组字段一起作为 where 定位。
+model Slot {
+  id: int @id @auto
+  owner: string(64)
+  slot: int
+  @@unique(owner, slot)
+}
+
+// uuid 主键、@map/@@map 名称映射、decimal/bigint/bytes 标量。
+model Product {
+  id: string(36) = uuid() @id
+  sku: string(32) @unique @map("product_sku")
+  price: decimal(10, 2)
+  stock: bigint = 0
+  payload?: bytes
+  @@map("products")
+}
+
+type Preferences = {
+  theme: "light" | "dark"
+  notifications: boolean
+  languages: string[]
+}
+
+model Account {
+  id: int @id @auto
+  email: string @unique
+  preferences?: json<Preferences>
+  deletedAt?: datetime
+  entries: AccountEntry[] @via(account)
+  @@softDelete(deletedAt)
+}
+
+model AccountEntry {
+  id: int @id @auto
+  title: string
+  account: Account
+  deletedAt?: datetime
+  @@softDelete(deletedAt)
+}
+
+// 显式 morph：判别列用字面量联合限定拥有方，两列绑定已有标量字段。
+model Attachment {
+  id: int @id @auto
+  name: string
+  ownerType: "Post" | "User"
+  ownerId: int
+  owner: morph(ownerType, ownerId)
+}
+
+// 隐式 morph：短形式自动生成 holderType/holderId 两列。
+model Note {
+  id: int @id @auto
+  body: string
+  holder: morph
+  @@index(holderType, holderId)
+}

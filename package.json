@@ -1,0 +1,55 @@
+{
+  "name": "@ofis/tsorm",
+  "version": "0.0.0",
+  "description": "A type-safe TypeScript ORM with one API for SQLite, MySQL/MariaDB and PostgreSQL",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZhangGuangHuiCoder/tsorm.git"
+  },
+  "bin": {
+    "tsorm": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./adapters/*": "./dist/adapters/*/index.js",
+    "./schema": "./dist/schema/index.js",
+    "./migrations": "./dist/migrations/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "docs": "vitepress dev docs",
+    "example": "bun scripts/example.ts",
+    "release": "bun scripts/release.ts",
+    "clean": "bun scripts/clean.ts && bunx oxfmt .",
+    "test": "docker compose -f examples/compose.yaml up -d --wait && bun test"
+  },
+  "dependencies": {
+    "mariadb": "~3.5.5",
+    "pg": "~8.23.1"
+  },
+  "devDependencies": {
+    "@types/bun": "~1.4.4",
+    "@types/pg": "~8.23.1",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "~4.1.0",
+    "typescript": "~6.0.3",
+    "vitepress": "2.0.0-alpha.21"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "trustedDependencies": [
+    "@vscode/vsce-sign"
+  ]
+}
