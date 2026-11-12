@@ -1,4 +1,6 @@
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { example } from "./example.js";
+import { fixtures } from "./fixtures.js";
 import { bin, cli, run } from "./lib.js";
 
 const extensionDir = "extensions";
@@ -74,9 +76,15 @@ async function buildDocs(): Promise<void> {
   await bin("vitepress", "build", "docs");
 }
 
-/** 完整构建：类型检查、编译 ORM 到 dist/，打包 VS Code 扩展到 artifacts/，并构建文档站点。 */
+/** 两个生成的客户端都不入 git，全仓类型检查前必须先生成；模板来自刚编译出的 dist。 */
+async function generateClients(): Promise<void> {
+  await Promise.all([example([]), fixtures()]);
+}
+
+/** 完整构建：编译 ORM 到 dist/，生成示例与测试客户端，类型检查、打包 VS Code 扩展到 artifacts/，并构建文档站点。 */
 async function build(): Promise<void> {
   await Promise.all([buildOrm(), typecheckExtension()]);
+  await generateClients();
   // 全仓类型检查会解析 scripts 对 dist 声明的引用，必须等 ORM 编译完成；与文档构建并行。
   await Promise.all([typecheckProject(), buildDocs()]);
   await bundleExtension();

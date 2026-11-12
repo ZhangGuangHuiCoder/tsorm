@@ -77,7 +77,7 @@ test/
 
 `bun test` 运行 `unit`、`integration`、`system` 三层。VS Code 扩展的语言逻辑测试独立放在 `extensions/test`（`bun test` 也会一并发现并运行），只测补全、悬停与格式化，不属于 ORM 库本身。
 
-`bun run test` 会先启动 Docker 数据库并等待健康检查，再执行 `bun test`，额外参数原样透传。测试直接使用源码，无需运行 `bun run build`。
+`bun run test` 会先启动 Docker 数据库并等待健康检查，再执行 `bun test`，额外参数原样透传。测试直接使用源码，但夹具客户端是生成产物，全新克隆需先 `bun run build`。
 
 ### 数据库范围
 
@@ -158,6 +158,7 @@ test/
 
 ## 约定
 
+- `fixtures/client.ts` 是 git 忽略的生成产物：由 `bun run build` 从 `fixtures/schema.orm` 自动生成，不要手工编辑；`bun run example` 只生成示例客户端。
 - 新增用例先按“判定顺序”确定层级，再按被测职责选择领域；不要按文件原先所在目录继承层级。
 - 集成用例必须通过 `eachDatabase` 或显式 `sandbox` 覆盖声明范围内的全部目标数据库；数据库差异用
   `ctx.target` 分支表达，并在注释里说明原因（例如 MySQL 的年份范围）。

@@ -28,7 +28,7 @@ bun install
 bun run build
 ```
 
-`build` compiles the ORM, type-checks the whole repository and extension, builds documentation, and packages the VS Code extension. Run `bun run example` without a database argument after changing schemas or client generation to regenerate the example and test clients.
+`build` compiles the ORM, regenerates the example and test clients, type-checks the whole repository and extension, builds documentation, and packages the VS Code extension. Both generated clients are git-ignored artifacts; `bun run example` without a database argument refreshes the example client individually.
 
 For focused checks:
 
@@ -43,7 +43,7 @@ bunx --no-install vitepress build docs
 bun run release minor   # patch | minor | major | x.y.z
 ```
 
-The script requires a clean `main` checkout, bumps the package version, runs the full build (including extension version synchronization), commits, tags `v<version>`, and pushes the commit and tag. The tag triggers CI builds, tests, package publishing, GitHub Release creation, and documentation deployment. The current workflow uses Bun, without a Node.js version matrix.
+The script requires a clean `main` checkout, bumps the package version, runs the full build (including extension version synchronization), commits, tags `v<version>`, and pushes the commit and tag. The tag triggers CI builds, tests, package publishing, GitHub Release creation, and documentation deployment. The current workflow runs on a single Bun version.
 
 ## Regression Workflow
 
@@ -64,7 +64,7 @@ TEST_DATABASES=sqlite,mysql,mariadb,postgres bun test
 TEST_DATABASES=sqlite bun test ./test/integration/sqlite-regressions.test.ts
 ```
 
-`bun test` discovers the unit, integration, and system tests under `test/`, plus `extensions/test/`. `bun run test` additionally starts `examples/compose.yaml` and therefore requires Docker. Tests do not replace the build or client generation steps.
+`bun test` discovers the unit, integration, and system tests under `test/`, plus `extensions/test/`. `bun run test` additionally starts `examples/compose.yaml` and therefore requires Docker.
 
 Without `TEST_DATABASES`, the helper includes SQLite and probes the configured server databases. An explicit list selects only those targets. A SQLite-only run does not verify server-specific behavior.
 

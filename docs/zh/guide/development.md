@@ -28,7 +28,7 @@ bun install
 bun run build
 ```
 
-`build` 编译 ORM，检查全仓与扩展的类型，构建文档并打包 VS Code 扩展。修改模型或客户端生成逻辑后，执行不带数据库参数的 `bun run example`，重新生成示例与测试客户端。
+`build` 编译 ORM，重新生成示例与测试客户端，检查全仓与扩展的类型，构建文档并打包 VS Code 扩展。两个生成的客户端均为 git 忽略的产物；不带数据库参数的 `bun run example` 可单独刷新示例客户端。
 
 针对性检查可单独运行：
 
@@ -43,7 +43,7 @@ bunx --no-install vitepress build docs
 bun run release minor   # patch | minor | major | x.y.z
 ```
 
-脚本要求 `main` 分支工作区干净，递增包版本，执行完整构建（包含扩展版本同步），然后提交、打 `v<version>` 标签并推送提交与标签。标签触发 CI 构建、测试、包发布、GitHub Release 创建和文档部署。当前工作流使用 Bun，没有 Node.js 多版本测试矩阵。
+脚本要求 `main` 分支工作区干净，递增包版本，执行完整构建（包含扩展版本同步），然后提交、打 `v<version>` 标签并推送提交与标签。标签触发 CI 构建、测试、包发布、GitHub Release 创建和文档部署。当前工作流使用单一 Bun 版本。
 
 ## 回归流程
 
@@ -64,7 +64,7 @@ TEST_DATABASES=sqlite,mysql,mariadb,postgres bun test
 TEST_DATABASES=sqlite bun test ./test/integration/sqlite-regressions.test.ts
 ```
 
-`bun test` 发现 `test/` 下的 unit、integration、system 测试以及 `extensions/test/`。`bun run test` 额外启动 `examples/compose.yaml`，因此需要 Docker。测试不能替代构建与客户端生成步骤。
+`bun test` 发现 `test/` 下的 unit、integration、system 测试以及 `extensions/test/`。`bun run test` 额外启动 `examples/compose.yaml`，因此需要 Docker。
 
 未设置 `TEST_DATABASES` 时，辅助函数包含 SQLite 并探测已配置的服务端数据库；显式列表只选择列出的目标。仅运行 SQLite 不能验证服务端数据库特有行为。
 

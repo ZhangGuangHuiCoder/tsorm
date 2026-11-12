@@ -22,7 +22,7 @@ bun install
 bun run build
 ```
 
-每次运行都会先重新生成客户端：不带数据库参数的 `bun run example` 只做生成，用于刷新 `examples/client.ts` 与 `test/fixtures/client.ts`。
+每次运行都会先重新生成示例客户端：不带数据库参数的 `bun run example` 只做生成，用于刷新 `examples/client.ts`。测试客户端 `test/fixtures/client.ts` 只由 `bun run build` 重新生成。两个文件均为 git 忽略的生成产物。
 
 ## 运行
 
@@ -46,9 +46,9 @@ bun run example pgsql
 
 ## 配置
 
-示例不需要任何环境变量：连接串内置在 `demo.ts` 中，默认指向 `compose.yaml` 的本地实例（SQLite 使用内存库），客户端时区固定为 `+08:00`。
+连接串内置在 `demo.ts` 中，默认指向 `compose.yaml` 的本地实例（SQLite 使用内存库），客户端时区固定为 `+08:00`。
 
-示例在空库中建表。无论演示成功还是中途失败，都会尝试在事务中清理本次创建的记录（包括软删除记录）；清理失败也会关闭连接。示例不会删除表结构或重置数据库，重新运行 MySQL 或 PostgreSQL 前需要自行准备空库。
+示例在空库中建表。无论演示成功还是中途失败，都会尝试在事务中清理本次创建的记录（包括软删除记录）；清理失败也会关闭连接。重新运行 MySQL 或 PostgreSQL 前需要自行准备空库。
 
 ## 阅读顺序
 
