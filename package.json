@@ -1,6 +1,6 @@
 {
   "name": "@ofis/tsorm",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A type-safe TypeScript ORM with one API for SQLite, MySQL/MariaDB and PostgreSQL",
   "license": "Apache-2.0",
   "repository": {
