@@ -34,6 +34,10 @@
       }
     },
     {
+      "name": "keyword.declaration.orm",
+      "match": "^\\s*(ignore|prefix)\\b"
+    },
+    {
       "name": "storage.modifier.orm",
       "match": "@@?\\b(id|auto|unique|updatedAt|map|via|relation|index|softDelete)\\b"
     },

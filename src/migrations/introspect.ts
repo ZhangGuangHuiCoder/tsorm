@@ -47,7 +47,14 @@ export interface DbModel {
   tables: Record<string, DbTable>;
 }
 
-export const HISTORY_TABLE = "_tsorm_migrations";
+import { HISTORY_TABLE } from "../schema/index.js";
+
+export { HISTORY_TABLE };
+
+/** The history table this connection's migrations are recorded in. */
+export const historyTable = (conn: Connection): string => {
+  return conn.datasource.historyTable ?? HISTORY_TABLE;
+};
 
 export function introspect(conn: Connection): Promise<DbModel> {
   return conn.provider.introspect(conn);
@@ -189,7 +196,7 @@ export function checksIn(item: string): string[] {
   return found;
 }
 
-/** True when the database holds any table besides the migration history. */
+/** True when the database holds any table besides the migration history and the ignored ones. */
 export async function hasTables(conn: Connection): Promise<boolean> {
   return Object.keys((await introspect(conn)).tables).length > 0;
 }

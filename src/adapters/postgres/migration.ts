@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { MigrationError } from "../../migrations/errors.js";
 import type { Connection, Datasource, MigrationProvider, Scratch, Section } from "../../migrations/provider.js";
 import { columnChanges, structuralIndexKey } from "../../migrations/provider.js";
-import { HISTORY_TABLE, type DbModel, type DbTable } from "../../migrations/introspect.js";
+import { historyTable, type DbModel, type DbTable } from "../../migrations/introspect.js";
 import type { TableChange } from "../../migrations/diff.js";
 import { postgresSchemaSQL } from "./index.js";
 import { isPostgresUrl } from "../urls.js";
@@ -136,7 +136,27 @@ async function connectOrCreate(ds: PostgresDatasource): Promise<{ conn: Connecti
 
 async function clearDatabase(conn: Connection): Promise<void> {
   const ds = asPostgres(conn.datasource);
-  await conn.script(`DROP SCHEMA IF EXISTS ${quote(ds.schema)} CASCADE; CREATE SCHEMA ${quote(ds.schema)}`);
+  const keep = ds.ignore;
+  if (!keep) {
+    await conn.script(`DROP SCHEMA IF EXISTS ${quote(ds.schema)} CASCADE; CREATE SCHEMA ${quote(ds.schema)}`);
+    return;
+  }
+  // Dropping the whole schema would take the ignored tables with it.
+  await conn.script(`CREATE SCHEMA IF NOT EXISTS ${quote(ds.schema)}`);
+  const objects: { name: string; kind: string }[] = await conn.query("SELECT c.relname AS name, c.relkind AS kind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m') AND NOT c.relispartition", [
+    ds.schema,
+  ]);
+  const statements = objects
+    .filter((o) => {
+      return !keep(o.name);
+    })
+    .map((o) => {
+      const kind = o.kind === "v" ? "VIEW" : o.kind === "m" ? "MATERIALIZED VIEW" : "TABLE";
+      return `DROP ${kind} IF EXISTS ${quote(ds.schema)}.${quote(o.name)} CASCADE;`;
+    });
+  if (statements.length) {
+    await conn.script(statements.join(" "));
+  }
 }
 
 async function resetDatabase(ds: PostgresDatasource): Promise<void> {
@@ -200,7 +220,7 @@ async function createScratch(base: PostgresDatasource, shadow: Datasource | unde
 
 async function historyExists(conn: Connection): Promise<boolean> {
   const ds = asPostgres(conn.datasource);
-  const rows = await conn.query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2", [ds.schema, HISTORY_TABLE]);
+  const rows = await conn.query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2", [ds.schema, historyTable(conn)]);
   return rows.length > 0;
 }
 
@@ -220,7 +240,11 @@ const pgActions: Record<string, string> = {
 async function introspect(conn: Connection): Promise<DbModel> {
   const ds = asPostgres(conn.datasource);
   const tables: Record<string, DbTable> = {};
-  const relations = await conn.query("SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r','p') AND c.relname <> $2 ORDER BY c.relname", [ds.schema, HISTORY_TABLE]);
+  const relations = (await conn.query("SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r','p') AND c.relname <> $2 ORDER BY c.relname", [ds.schema, historyTable(conn)])).filter(
+    (r) => {
+      return !ds.ignore?.(r.name);
+    },
+  );
   for (const r of relations) {
     tables[r.name] = {
       name: r.name,
@@ -461,7 +485,8 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
   return sections;
 }
 
-const historyDDL = `CREATE TABLE IF NOT EXISTS "${HISTORY_TABLE}" (
+const historyDDL = (table: string) => {
+  return `CREATE TABLE IF NOT EXISTS ${quote(table)} (
     "id"                    VARCHAR(36) PRIMARY KEY NOT NULL,
     "checksum"              VARCHAR(64) NOT NULL,
     "finished_at"           TIMESTAMPTZ,
@@ -471,6 +496,7 @@ const historyDDL = `CREATE TABLE IF NOT EXISTS "${HISTORY_TABLE}" (
     "started_at"            TIMESTAMPTZ NOT NULL DEFAULT now(),
     "applied_steps_count"   INTEGER NOT NULL DEFAULT 0
 )`;
+};
 
 export const postgresProvider: MigrationProvider = {
   id: "postgresql",

@@ -80,6 +80,8 @@ export interface Table {
   primaryKey?: string[];
   /** Physical table name (@@map). */
   map?: string;
+  /** Global table prefix from the top-level `prefix` statement; prepended to the physical name. */
+  prefix?: string;
   unique: string[][];
   indexes: string[][];
   /** Client-wide omit defaults from $extend({ omit }). */
@@ -99,9 +101,19 @@ export const omitted = (t: Table, args: any): Record<string, boolean> | undefine
   }
   return { ...t.omit, ...args.omit };
 };
+/** Default migration history table name. */
+export const HISTORY_TABLE = "_tsorm_migrations";
+/** Migration history table name for a schema `prefix`. */
+export const historyTableName = (prefix: string | undefined): string => {
+  return (prefix ?? "") + HISTORY_TABLE;
+};
 /** Physical table name. */
 export const tableName = (t: Table): string => {
-  return t.map ?? t.name;
+  return (t.prefix ?? "") + (t.map ?? t.name);
+};
+/** Base for index and constraint names: the model name behind the table prefix. */
+export const objectName = (t: Table): string => {
+  return (t.prefix ?? "") + t.name;
 };
 /** Physical column name. */
 export const columnName = (c: Column): string => {
@@ -140,6 +152,10 @@ function invalidDefault(col: Column, d: any): boolean {
 }
 export interface Schema {
   jsonTypes?: Record<string, JsonShape>;
+  /** Physical table name patterns migrations never touch. `*` matches any run of characters; matching ignores case. */
+  ignore?: string[];
+  /** Global table prefix; it also names the migration history table. */
+  prefix?: string;
   version: 1;
   tables: Record<string, Table>;
 }
@@ -381,7 +397,46 @@ export function parseSchema(input: string): Schema {
     return items.length === 1 ? items[0] : { kind: "union", items };
   };
   const models: Model[] = [];
+  const ignore: string[] = [];
+  const ignoreKeys = new Set<string>();
+  let prefix = "";
   while (peek().value !== "<EOF>") {
+    if (peek().value === "prefix" && peek().kind === "id") {
+      const token = tokens[p++];
+      const name = peek();
+      if (prefix) {
+        error("Duplicate prefix", token);
+      }
+      if (name.kind !== "string" || !/^[A-Za-z0-9_]+$/.test(name.value)) {
+        error("prefix requires a string of letters, digits and underscores", token);
+      }
+      p++;
+      prefix = name.value;
+      eat(";");
+      continue;
+    }
+    if (peek().value === "ignore" && peek().kind === "id") {
+      const token = tokens[p++];
+      const list = value();
+      if (
+        !Array.isArray(list) ||
+        !list.length ||
+        list.some((x) => {
+          return typeof x !== "string" || !x || x.includes("\0");
+        })
+      ) {
+        error("ignore requires a non-empty list of table name strings", token);
+      }
+      for (const pattern of list as string[]) {
+        if (ignoreKeys.has(pattern.toLowerCase())) {
+          error("Duplicate ignore pattern " + pattern, token);
+        }
+        ignore.push(pattern);
+        ignoreKeys.add(pattern.toLowerCase());
+      }
+      eat(";");
+      continue;
+    }
     if (eat("type")) {
       const name = ident();
       if (Object.hasOwn(jsonTypes, name)) {
@@ -666,6 +721,9 @@ export function parseSchema(input: string): Schema {
     if (tableMap) {
       t.map = tableMap;
     }
+    if (prefix) {
+      t.prefix = prefix;
+    }
     tables[m.name] = t;
     const seen = new Set<string>();
     for (const f of m.fields) {
@@ -854,10 +912,10 @@ export function parseSchema(input: string): Schema {
         if (f.nullable || get(f, "unique") || get(f, "relation")) {
           error("Invalid many-to-many options", f.token);
         }
-        const junction = `_${m.name}_${f.name}`;
-        if (tables[junction]) {
+        if (tables[`_${m.name}_${f.name}`]) {
           error("Junction table name collision", f.token);
         }
+        const junction = `${prefix}_${m.name}_${f.name}`;
         t.relations[f.name] = {
           name: f.name,
           target: f.type,
@@ -1281,10 +1339,14 @@ export function parseSchema(input: string): Schema {
       }
     }
   }
-  const physicalTables = new Set<string>(["_tsorm_migrations"]);
+  const physicalTables = new Set<string>([historyTableName(prefix)]);
+  const ignores = ignoredTable(ignore);
   const reserveTable = (name: string) => {
     if (physicalTables.has(name)) {
       error("Physical table name collision: " + name);
+    }
+    if (ignores(name)) {
+      error("Table " + name + " matches an ignore pattern");
     }
     physicalTables.add(name);
   };
@@ -1306,6 +1368,26 @@ export function parseSchema(input: string): Schema {
       }
     }
   }
-  return { version: 1, tables, ...(Object.keys(jsonTypes).length ? { jsonTypes } : {}) };
+  return { version: 1, tables, ...(Object.keys(jsonTypes).length ? { jsonTypes } : {}), ...(ignore.length ? { ignore } : {}), ...(prefix ? { prefix } : {}) };
+}
+/**
+ * Predicate for physical table names covered by `ignore` patterns. `*` matches any
+ * run of characters; everything else matches literally, ignoring case.
+ */
+export function ignoredTable(patterns: readonly string[] = []): (name: string) => boolean {
+  const regexes = patterns.map((pattern) => {
+    const source = pattern
+      .split("*")
+      .map((part) => {
+        return part.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+      })
+      .join("[\\s\\S]*");
+    return new RegExp("^" + source + "$", "i");
+  });
+  return (name) => {
+    return regexes.some((r) => {
+      return r.test(name);
+    });
+  };
 }
 export { generateClient } from "./generate.js";

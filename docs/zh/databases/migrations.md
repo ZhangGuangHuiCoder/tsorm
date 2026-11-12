@@ -135,6 +135,16 @@ Drift detected: Your database schema is not in sync with your migration history.
 
 主动重置用 `tsorm migrate --reset`：删除全部表和数据，重新应用所有迁移，然后照常检查模型变更。
 
+## 忽略的表
+
+模型文件中用 `ignore` 声明忽略的表（见[忽略表](../schema/overview.md#忽略表)）后：
+
+- `migrate` 的漂移检测、`diff` 和 `push` 都看不到这些表，不会生成删除它们的语句。
+- `migrate --reset` 和 `push --reset` 只删除模型管理的表和视图，被忽略的表及其数据保持原样。PostgreSQL 下不再删除整个 schema，而是逐表 `DROP ... CASCADE`。
+- `deploy` 判断数据库是否为空时不计被忽略的表；模型文件不存在时按未声明 `ignore` 处理。
+
+被忽略的表若有外键引用模型管理的表，重置时 PostgreSQL 会随 `CASCADE` 删除这些外键，MySQL 和 SQLite 会留下悬空引用。
+
 ## 接入已有数据库
 
 先执行 `tsorm diff --from database --check`，确认退出码为 0；存在差异时先处理，再为已有数据库登记基线：
@@ -173,7 +183,7 @@ migrations/
 - `migration_lock.toml` 记录数据库类型，换成其他类型的数据库时报 `PROVIDER_MISMATCH`。
 - 整个目录都应提交到版本管理。
 
-迁移记录保存在数据库的 `_tsorm_migrations` 表中：
+迁移记录保存在数据库的 `_tsorm_migrations` 表中（声明了[表前缀](../schema/overview.md#表前缀)时为 `<前缀>_tsorm_migrations`）：
 
 | 列                          | 说明                                           |
 | --------------------------- | ---------------------------------------------- |

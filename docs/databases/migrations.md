@@ -135,6 +135,16 @@ Drift detected: Your database schema is not in sync with your migration history.
 
 To reset deliberately, use `tsorm migrate --reset`: it drops all tables and data, re-applies every migration, then checks for model changes as usual.
 
+## Ignored Tables
+
+Once the schema declares tables with `ignore` (see [Ignoring Tables](../schema/overview.md#ignoring-tables)):
+
+- `migrate` drift detection, `diff` and `push` do not see those tables and never generate statements that drop them.
+- `migrate --reset` and `push --reset` drop only this schema's tables and views; ignored tables and their data stay as they are. On PostgreSQL the schema is no longer dropped as a whole; tables are dropped one by one with `DROP ... CASCADE`.
+- `deploy` does not count ignored tables when it checks whether the database is empty. Without a schema file it behaves as if nothing were ignored.
+
+If an ignored table has a foreign key referencing one of this schema's tables, a reset on PostgreSQL removes that foreign key through `CASCADE`, while MySQL and SQLite leave a dangling reference.
+
 ## Adopting an Existing Database
 
 First run `tsorm diff --from database --check` and confirm exit code 0. Resolve any differences before registering a baseline for the existing database:
@@ -173,7 +183,7 @@ When the timestamps have the following problems, the tool never adjusts them aut
 - `migration_lock.toml` records the database type; switching to a different type raises `PROVIDER_MISMATCH`.
 - The whole directory should be committed to version control.
 
-Migration records are stored in the database's `_tsorm_migrations` table:
+Migration records are stored in the database's `_tsorm_migrations` table (`<prefix>_tsorm_migrations` when the schema declares a [table prefix](../schema/overview.md#table-prefix)):
 
 | Column                      | Description                                                  |
 | --------------------------- | ------------------------------------------------------------ |

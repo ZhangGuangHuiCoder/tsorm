@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { MigrationError } from "../../migrations/errors.js";
 import type { Connection, Datasource, MigrationProvider, Scratch, Section } from "../../migrations/provider.js";
 import { columnChanges } from "../../migrations/provider.js";
-import { HISTORY_TABLE, balanced, checksIn, leadingIdentifier, splitTopLevel, unquote, type DbColumn, type DbIndex, type DbModel, type DbTable } from "../../migrations/introspect.js";
+import { historyTable, balanced, checksIn, leadingIdentifier, splitTopLevel, unquote, type DbColumn, type DbIndex, type DbModel, type DbTable } from "../../migrations/introspect.js";
 import type { TableChange } from "../../migrations/diff.js";
 import { sqliteSchemaSQL } from "./index.js";
 import { isSqliteUrl } from "../urls.js";
@@ -66,12 +66,13 @@ async function databaseExists(ds: SqliteDatasource): Promise<boolean> {
 }
 
 async function clearDatabase(conn: Connection): Promise<void> {
+  const keep = conn.datasource.ignore;
   const objects = await conn.query("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')");
   await conn.script(
     "PRAGMA foreign_keys=OFF;" +
       objects
         .filter((o) => {
-          return o.type !== "trigger";
+          return o.type !== "trigger" && !keep?.(o.name);
         })
         .map((o) => {
           return `DROP ${o.type === "view" ? "VIEW" : "TABLE"} IF EXISTS ${quote(o.name)};`;
@@ -79,16 +80,40 @@ async function clearDatabase(conn: Connection): Promise<void> {
         .join("") +
       "PRAGMA foreign_keys=ON;",
   );
-  const left = await conn.query("SELECT 1 FROM sqlite_sequence LIMIT 1").catch(() => {
+  const left: { name: string }[] = await conn.query("SELECT name FROM sqlite_sequence").catch(() => {
     return [];
   });
-  if (left.length) {
-    await conn.script("DELETE FROM sqlite_sequence");
+  const stale = left
+    .map((row) => {
+      return row.name;
+    })
+    .filter((name) => {
+      return !keep?.(name);
+    });
+  if (stale.length) {
+    await conn.query(
+      `DELETE FROM sqlite_sequence WHERE name IN (${stale
+        .map(() => {
+          return "?";
+        })
+        .join(",")})`,
+      stale,
+    );
   }
 }
 
 async function resetDatabase(ds: SqliteDatasource): Promise<void> {
-  if (ds.filename === ":memory:") {
+  if (ds.filename === ":memory:" || !(await databaseExists(ds))) {
+    return;
+  }
+  if (ds.ignore) {
+    // Deleting the file would take the ignored tables with it.
+    const conn = await connect(ds);
+    try {
+      await clearDatabase(conn);
+    } finally {
+      await conn.close();
+    }
     return;
   }
   for (const suffix of ["", "-wal", "-shm", "-journal"]) {
@@ -111,7 +136,7 @@ async function createScratch(): Promise<Scratch> {
 }
 
 async function historyExists(conn: Connection): Promise<boolean> {
-  const rows = await conn.query("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?", [HISTORY_TABLE]);
+  const rows = await conn.query("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?", [historyTable(conn)]);
   return rows.length > 0;
 }
 
@@ -138,7 +163,10 @@ async function runScriptAtomically(conn: Connection, sql: string): Promise<void>
 }
 
 async function introspect(conn: Connection): Promise<DbModel> {
-  const rows = await conn.query("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != ? ORDER BY name", [HISTORY_TABLE]);
+  const ignore = conn.datasource.ignore;
+  const rows = (await conn.query("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != ? ORDER BY name", [historyTable(conn)])).filter((row) => {
+    return !ignore?.(row.name);
+  });
   const tables: Record<string, DbTable> = {};
   for (const row of rows) {
     const sql: string = row.sql;
@@ -363,7 +391,8 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
   return sections;
 }
 
-const historyDDL = `CREATE TABLE IF NOT EXISTS "${HISTORY_TABLE}" (
+const historyDDL = (table: string) => {
+  return `CREATE TABLE IF NOT EXISTS ${quote(table)} (
     "id"                    TEXT PRIMARY KEY NOT NULL,
     "checksum"              TEXT NOT NULL,
     "finished_at"           DATETIME,
@@ -373,6 +402,7 @@ const historyDDL = `CREATE TABLE IF NOT EXISTS "${HISTORY_TABLE}" (
     "started_at"            DATETIME NOT NULL DEFAULT current_timestamp,
     "applied_steps_count"   INTEGER UNSIGNED NOT NULL DEFAULT 0
 )`;
+};
 
 export const sqliteProvider: MigrationProvider = {
   id: "sqlite",

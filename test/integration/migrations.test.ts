@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { deploy, diff, migrate, MigrationError, push, resolve, status } from "../../src/migrations/index.js";
 import type { CommandOptions } from "../../src/migrations/index.js";
 import { sandbox, targets, type Sandbox } from "../helpers/databases.js";
+import { providerFor } from "../../src/adapters/providers.js";
+import { createClient } from "../../src/index.js";
+import { parseSchema } from "../../src/schema/index.js";
 
 /** 初始模型。 */
 const V1 = `
@@ -278,6 +281,153 @@ for (const target of targets) {
       writeSchema(V3);
       await expectMigrationError(push(options), "DATA_LOSS");
       expect((await push({ ...options, force: true })).changed).toBeTrue();
+    });
+
+    /** 以“其他系统”的身份直接执行 SQL，返回查询结果。 */
+    const foreign = async (sql: string) => {
+      const p = await providerFor(box.url);
+      const conn = await p.connect(p.parseDatasource(box.url, dir));
+      try {
+        return await conn.query(sql);
+      } finally {
+        await conn.close();
+      }
+    };
+    const foreignTables = async () => {
+      const p = await providerFor(box.url);
+      const conn = await p.connect(p.parseDatasource(box.url, dir));
+      try {
+        return Object.keys((await p.introspect(conn)).tables)
+          .filter((name) => {
+            return name.startsWith("wp_");
+          })
+          .sort();
+      } finally {
+        await conn.close();
+      }
+    };
+    const IGNORED = 'ignore ["wp_*"]\n';
+    const createForeign = async () => {
+      await foreign("CREATE TABLE wp_options (id INT PRIMARY KEY, val VARCHAR(20))");
+      await foreign("INSERT INTO wp_options (id, val) VALUES (1, 'kept')");
+    };
+
+    // 不声明 ignore 时，其他系统的表会被视为漂移
+    test("tables from other systems count as drift without ignore", async () => {
+      await migrate(options);
+      await createForeign();
+      await expectMigrationError(migrate(options), "NON_INTERACTIVE");
+    });
+
+    // ignore 的表不参与漂移检测、diff 和 push，也不会被删除
+    test("ignored tables are invisible to migrate, diff and push", async () => {
+      writeSchema(IGNORED + V1);
+      await migrate(options);
+      await createForeign();
+      await nextSecond();
+      writeSchema(IGNORED + V2);
+      const result = await migrate(options);
+      expect(result.reset).toBeFalse();
+      expect(result.migration).toBeDefined();
+      expect(readFileSync(join(dir, "migrations", result.migration + ".sql"), "utf8")).not.toContain("wp_");
+      expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
+      expect((await diff({ ...options, from: "migrations", to: "database" })).diff.empty).toBeTrue();
+      expect((await push(options)).changed).toBeFalse();
+      expect(await foreignTables()).toEqual(["wp_options"]);
+    });
+
+    // migrate --reset 与 push --reset 只清空本系统的表
+    test("resets keep ignored tables and their data", async () => {
+      writeSchema(IGNORED + V1);
+      await migrate(options);
+      await createForeign();
+      const result = await migrate({ ...options, reset: true, force: true });
+      expect(result.reset).toBeTrue();
+      expect(await foreignTables()).toEqual(["wp_options"]);
+      await push({ ...options, reset: true });
+      expect(await foreignTables()).toEqual(["wp_options"]);
+      const rows = await foreign("SELECT val FROM wp_options");
+      expect(
+        rows.map((r) => {
+          return r.val;
+        }),
+      ).toEqual(["kept"]);
+      expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
+    });
+
+    // 数据库里只有被忽略的表时，deploy 视其为空库；不声明 ignore 时仍要求先做基线
+    test("deploy treats a database holding only ignored tables as empty", async () => {
+      writeSchema(IGNORED + V1);
+      await migrate({ ...options, createOnly: true });
+      const fresh = await sandbox(target);
+      try {
+        const p = await providerFor(fresh.url);
+        const { conn } = await p.connectOrCreate(p.parseDatasource(fresh.url, dir));
+        try {
+          await conn.query("CREATE TABLE wp_users (id INT PRIMARY KEY)");
+        } finally {
+          await conn.close();
+        }
+        writeSchema(V1);
+        await expectMigrationError(deploy({ ...options, url: fresh.url }), "DATABASE_NOT_EMPTY");
+        writeSchema(IGNORED + V1);
+        expect((await deploy({ ...options, url: fresh.url })).applied).toHaveLength(1);
+      } finally {
+        await fresh.dispose();
+      }
+    });
+
+    // 两个带不同前缀的应用共用一个库：各自的表和迁移历史互不干扰
+    test("two prefixed schemas share one database", async () => {
+      const app = (prefix: string, other: string) => {
+        return `prefix "${prefix}"\nignore ["${other}*"]\nmodel User {\n  id: int @id @auto\n  email: string(191) @unique\n  tags: Tag[]\n}\nmodel Tag {\n  id: int @id @auto\n  name: string(50)\n  users: User[] @via(tags)\n}\n`;
+      };
+      const other = mkdtempSync(join(tmpdir(), "tsorm-mig-"));
+      try {
+        writeSchema(app("a_", "b_"));
+        writeFileSync(join(other, "schema.orm"), app("b_", "a_"));
+        const b = { ...options, cwd: other };
+        await migrate(options);
+        await migrate(b);
+        const p = await providerFor(box.url);
+        const conn = await p.connect(p.parseDatasource(box.url, dir));
+        let names: string[];
+        try {
+          names = Object.keys((await p.introspect(conn)).tables).sort();
+        } finally {
+          await conn.close();
+        }
+        expect(names).toEqual(["a_Tag", "a_User", "a__User_tags", "a__tsorm_migrations", "b_Tag", "b_User", "b__User_tags", "b__tsorm_migrations"]);
+        expect((await migrate(options)).migration).toBeUndefined();
+        expect((await status(options)).applied).toHaveLength(1);
+        expect((await status(b)).applied).toHaveLength(1);
+
+        const db: any = await createClient(parseSchema(app("a_", "b_")), { adapter: box.adapter(false) });
+        try {
+          await db.user.create({ data: { email: "x@a.com", tags: { create: [{ name: "ts" }] } } });
+          const users = await db.user.findMany({ include: { tags: true } });
+          expect(
+            users.map((u: any) => {
+              return [
+                u.email,
+                u.tags.map((t: any) => {
+                  return t.name;
+                }),
+              ];
+            }),
+          ).toEqual([["x@a.com", ["ts"]]]);
+        } finally {
+          await db.$close();
+        }
+
+        await migrate({ ...options, reset: true, force: true });
+        const rows = await foreign(`SELECT COUNT(*) AS n FROM ${p.quote("a_User")}`);
+        expect(Number(rows[0].n)).toBe(0);
+        expect((await status(b)).exitCode).toBe(0);
+        expect((await migrate(b)).reset).toBeFalse();
+      } finally {
+        rmSync(other, { recursive: true, force: true });
+      }
     });
 
     // 锁文件固定数据库类型，切换时报 PROVIDER_MISMATCH

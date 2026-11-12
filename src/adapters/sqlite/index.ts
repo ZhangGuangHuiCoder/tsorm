@@ -3,7 +3,7 @@ import { encode as encodeScalar, decode, safeInteger, scalarGroupKey } from "../
 import { quoteIdentifier as q } from "../../query/identifiers.js";
 import type { Adapter, RuntimeAdapter } from "../../core/adapter.js";
 import { DatabaseSync } from "node:sqlite";
-import { columnName, referentialActions, tableName, type Column, type Schema } from "../../schema/index.js";
+import { columnName, objectName, referentialActions, tableName, type Column, type Schema } from "../../schema/index.js";
 const sqliteTypes: Record<string, string> = {
   int: "INTEGER",
   bigint: "INTEGER",
@@ -97,12 +97,12 @@ export function sqliteSchemaSQL(schema: Schema): string[] {
     }
     statements.push(`CREATE TABLE ${q(tableName(t))} (${definitions.join(", ")});`);
     for (const keys of t.indexes) {
-      statements.push(`CREATE INDEX ${q(`${t.name}_${keys.join("_")}_idx`)} ON ${q(tableName(t))} (${keys.map(col).join(",")});`);
+      statements.push(`CREATE INDEX ${q(`${objectName(t)}_${keys.join("_")}_idx`)} ON ${q(tableName(t))} (${keys.map(col).join(",")});`);
     }
     // 关系列索引与外键约束解耦：morph 与普通外键列一律建索引，命名只描述“关系列”。
     for (const r of Object.values(t.relations)) {
       if (r.owner && !r.many && !t.columns[r.source].unique) {
-        statements.push(`CREATE INDEX ${q(`${t.name}_${r.source}_rel_idx`)} ON ${q(tableName(t))} (${col(r.source)});`);
+        statements.push(`CREATE INDEX ${q(`${objectName(t)}_${r.source}_rel_idx`)} ON ${q(tableName(t))} (${col(r.source)});`);
       }
     }
   }

@@ -7,7 +7,7 @@ import mariadb from "mariadb";
 import { mysqlConnection } from "../../shared/connection.js";
 import { createHash } from "node:crypto";
 import { quoteMysqlIdentifier } from "../../query/identifiers.js";
-import { columnName, referentialActions, tableName, type Schema, type Table, type Column } from "../../schema/index.js";
+import { columnName, objectName, referentialActions, tableName, type Schema, type Table, type Column } from "../../schema/index.js";
 const q = quoteMysqlIdentifier;
 function encode(c: Column, value: any): any {
   const result = encodeScalar(c, value);
@@ -168,12 +168,12 @@ export function mysqlSchemaSQL(schema: Schema): string[] {
       defs.push(`UNIQUE (${keys.map(col).join(",")})`);
     }
     for (const keys of t.indexes) {
-      defs.push(`INDEX ${q(indexName(t.name, ...keys))} (${keys.map(col).join(",")})`);
+      defs.push(`INDEX ${q(indexName(objectName(t), ...keys))} (${keys.map(col).join(",")})`);
     }
     // 关系列索引与外键约束解耦：morph 与普通外键列一律显式建索引，不再依赖 InnoDB 的隐式行为。
     for (const r of Object.values(t.relations)) {
       if (r.owner && !r.many && !t.columns[r.source].unique) {
-        defs.push(`INDEX ${q(indexName(t.name, r.source, "relidx"))} (${col(r.source)})`);
+        defs.push(`INDEX ${q(indexName(objectName(t), r.source, "relidx"))} (${col(r.source)})`);
       }
     }
     tables.push(`CREATE TABLE ${q(tableName(t))} (${defs.join(", ")}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`);
@@ -181,7 +181,7 @@ export function mysqlSchemaSQL(schema: Schema): string[] {
       if (r.owner && !r.many && !r.polymorphic) {
         const target = schema.tables[r.target];
         foreign.push(
-          `ALTER TABLE ${q(tableName(t))} ADD CONSTRAINT ${q(indexName(t.name, r.name, "fk"))} FOREIGN KEY (${col(r.source)}) REFERENCES ${q(tableName(target))} (${q(columnName(target.columns[r.foreign]))}) ON DELETE ${referentialActions[r.onDelete ?? "Restrict"]} ON UPDATE ${referentialActions[r.onUpdate ?? "Restrict"]}`,
+          `ALTER TABLE ${q(tableName(t))} ADD CONSTRAINT ${q(indexName(objectName(t), r.name, "fk"))} FOREIGN KEY (${col(r.source)}) REFERENCES ${q(tableName(target))} (${q(columnName(target.columns[r.foreign]))}) ON DELETE ${referentialActions[r.onDelete ?? "Restrict"]} ON UPDATE ${referentialActions[r.onUpdate ?? "Restrict"]}`,
         );
       }
     }

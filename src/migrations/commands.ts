@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve as resolvePath } from "node:path";
-import { parseSchema, tableName, type Schema } from "../schema/index.js";
+import { historyTableName, ignoredTable, parseSchema, tableName, type Schema } from "../schema/index.js";
 import { providerFor } from "../adapters/providers.js";
 import type { Connection, Datasource, MigrationProvider, Scratch } from "./provider.js";
 import { diffModels, evaluateRisks, type SchemaDiff } from "./diff.js";
@@ -29,6 +29,8 @@ export interface CommandOptions {
 interface Settings {
   root: string;
   schema: string;
+  /** The parsed schema file, when it exists; it supplies `prefix` and `ignore`. */
+  parsed?: Schema;
   migrations: string;
   provider: MigrationProvider;
   url: string;
@@ -45,6 +47,7 @@ async function settings(options: CommandOptions): Promise<Settings> {
   return {
     root,
     schema,
+    parsed: existsSync(schema) ? readSchema(schema) : undefined,
     migrations: join(dirname(schema), "migrations"),
     provider: await providerFor(url),
     url,
@@ -57,11 +60,31 @@ const EMPTY_MIGRATION = "-- This is an empty migration.";
 const provider = (config: Settings): MigrationProvider => {
   return config.provider;
 };
+/** Parses a url and attaches the schema's history table and ignored tables. */
+const withSchema = (config: Settings, url: string): Datasource => {
+  const ds = config.provider.parseDatasource(url, config.root);
+  const historyTable = historyTableName(config.parsed?.prefix);
+  if (!config.parsed?.ignore?.length) {
+    return { ...ds, historyTable };
+  }
+  const ignored = ignoredTable(config.parsed.ignore);
+  return {
+    ...ds,
+    historyTable,
+    ignore: (name) => {
+      return name !== historyTable && ignored(name);
+    },
+  };
+};
 const datasource = (config: Settings): Datasource => {
-  return config.provider.parseDatasource(config.url, config.root);
+  return withSchema(config, config.url);
 };
 const shadowDatasource = (config: Settings) => {
-  return config.shadowDatabaseUrl ? config.provider.parseDatasource(config.shadowDatabaseUrl, config.root) : undefined;
+  return config.shadowDatabaseUrl ? withSchema(config, config.shadowDatabaseUrl) : undefined;
+};
+/** The schema for commands that compare against it; a missing file is an error. */
+const requireSchema = (config: Settings): Schema => {
+  return config.parsed ?? readSchema(config.schema);
 };
 
 /** Connects without creating anything; a missing database is an error. */
@@ -149,6 +172,7 @@ export async function migrate(options: CommandOptions & { name?: string; createO
   const config = await settings(options);
   const { log = () => {} } = options;
   const p = provider(config);
+  const schema = requireSchema(config);
   const ds = datasource(config);
   checkLock(config.migrations, p.id);
   const local = readLocalMigrations(config.migrations);
@@ -235,7 +259,7 @@ export async function migrate(options: CommandOptions & { name?: string; createO
         result.applied.push(m.name);
       }
       const from = await introspect(await replay(workspace, local));
-      const target = await targetModel(workspace, p, readSchema(config.schema));
+      const target = await targetModel(workspace, p, schema);
       const diff = diffModels(from, target);
       if (diff.empty && !options.createOnly) {
         if (!result.applied.length) {
@@ -533,8 +557,10 @@ export interface DiffResult {
 export async function diff(options: CommandOptions & { from?: DiffSource; to?: DiffSource }): Promise<DiffResult> {
   const config = await settings(options);
   const p = provider(config);
-  if ((options.from ?? "migrations") === "empty" && (options.to ?? "schema") === "schema") {
-    return initialDDL(p, readSchema(config.schema));
+  const from = options.from ?? "migrations";
+  const to = options.to ?? "schema";
+  if (from === "empty" && to === "schema") {
+    return initialDDL(p, requireSchema(config));
   }
   let scratch: Scratch | undefined;
   const load = async (source: DiffSource): Promise<DbModel> => {
@@ -551,13 +577,13 @@ export async function diff(options: CommandOptions & { from?: DiffSource; to?: D
     }
     scratch ??= await p.createScratch(datasource(config), shadowDatasource(config));
     if (source === "schema") {
-      return targetModel(scratch, p, readSchema(config.schema));
+      return targetModel(scratch, p, requireSchema(config));
     }
     checkLock(config.migrations, p.id);
     return introspect(await replay(scratch, readLocalMigrations(config.migrations)));
   };
   try {
-    const changes = diffModels(await load(options.from ?? "migrations"), await load(options.to ?? "schema"));
+    const changes = diffModels(await load(from), await load(to));
     return {
       diff: changes,
       sql: changes.empty ? EMPTY_MIGRATION + "\n" : changes.sql,
@@ -620,6 +646,7 @@ export async function push(options: CommandOptions & { reset?: boolean }): Promi
   const config = await settings(options);
   const { log = () => {} } = options;
   const p = provider(config);
+  const schema = requireSchema(config);
   const ds = datasource(config);
   if (options.reset) {
     await p.resetDatabase(ds);
@@ -633,7 +660,7 @@ export async function push(options: CommandOptions & { reset?: boolean }): Promi
     scratch = await p.createScratch(ds, shadowDatasource(config));
     const workspace = scratch;
     return await withLock(conn, async () => {
-      const target = await targetModel(workspace, p, readSchema(config.schema));
+      const target = await targetModel(workspace, p, schema);
       const diff = diffModels(await introspect(conn), target);
       if (diff.empty) {
         log("The database is already in sync with the schema.");

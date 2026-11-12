@@ -80,6 +80,43 @@ model Token {
 
 `@updatedAt` 字段在创建时可以不传。ORM 更新（包括 `updateMany`、`upsert` 和嵌套更新）写入至少一个标量字段时，该字段自动更新；显式赋值优先。软删除和恢复不改变它。
 
+## 表前缀
+
+用顶层 `prefix` 给所有物理表名加统一前缀，模型名和客户端 API 不变：
+
+```ts
+prefix "app_"
+
+model User {
+  id: int @id @auto
+}
+```
+
+- 上例的表名为 `app_User`；`@@map("users")` 的表名为 `app_users`，多对多中间表同样带前缀。
+- 前缀只能包含字母、数字和下划线，整个文件最多声明一次。
+- 索引和外键名称同样带前缀，迁移历史表变为 `<前缀>_tsorm_migrations`，不同前缀的模型各自记录迁移。
+- `ignore` 按加前缀后的物理表名匹配。
+
+已有数据库新增或修改前缀时，迁移会表现为删除旧表、创建新表，需要手动编写改名迁移。
+
+## 忽略表
+
+用顶层 `ignore` 声明不归本模型管理的表，迁移命令会完全跳过它们：
+
+```ts
+ignore ["wp_*", "audit_log"]
+
+model User {
+  id: int @id @auto
+}
+```
+
+- 列表中是物理表名，`*` 匹配任意长度的字符，其余字符按字面匹配，不区分大小写。
+- 可以写多条 `ignore`，结果合并。
+- 模型表、`@@map` 名称和多对多中间表都不能命中忽略模式，否则校验报错。
+
+被忽略的表不参与漂移检测、`diff` 和 `push`，`migrate --reset`、`push --reset` 也只删除模型管理的表，见[忽略的表](../databases/migrations.md#忽略的表)。
+
 ## 保留名称
 
 模型和字段应避开保留名称： `AND`、`OR`、`NOT`、`_count`、`constructor`、`prototype` 和 `__proto__`，`$` 和 `__orm_` 前缀保留给内部使用。

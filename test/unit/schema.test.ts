@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { generateClient, parseSchema, SchemaError, type Schema } from "../../src/schema/index.js";
+import { generateClient, ignoredTable, parseSchema, SchemaError, tableName, type Schema } from "../../src/schema/index.js";
 import { encode } from "../../src/shared/scalars.js";
 import { OrmError } from "../../src/index.js";
 import { mysqlSchemaSQL } from "../../src/adapters/mysql/index.js";
@@ -176,6 +176,90 @@ describe("morph", () => {
     ["mixed implicit columns", poly("  holderType: string\n  holder: morph\n", "  fs: File[] @via(holder)\n"), "both columns explicit or both implicit"],
     ["two morphs on one discriminator", poly("  t: string\n  k1: int\n  k2: int\n  a: morph(t, k1)\n  b: morph(t, k2)\n", "  fs: File[] @via(a)\n"), "cannot serve multiple morph fields"],
     ["a model named morph", "model morph {\n  id: int @id\n}", "Invalid or duplicate model"],
+  ])("rejects %s", (_, text, message) => {
+    expect(parseError(text).message).toContain(message);
+  });
+});
+
+describe("prefix", () => {
+  const source = 'prefix "app_"\nmodel User {\n  id: int @id @auto\n  tags: Tag[]\n  @@index(id)\n}\nmodel Tag {\n  id: int @id @auto\n  users: User[] @via(tags)\n  @@map("labels")\n}';
+
+  // 前缀加在所有物理表名上，包括 @@map 名称和多对多中间表；模型名不变
+  test("prefixes every physical table name", () => {
+    const schema = parseSchema(source);
+    expect(schema.prefix).toBe("app_");
+    expect(Object.keys(schema.tables)).toEqual(["User", "Tag"]);
+    expect(tableName(schema.tables.User)).toBe("app_User");
+    expect(tableName(schema.tables.Tag)).toBe("app_labels");
+    expect(schema.tables.User.relations.tags.junction).toBe("app__User_tags");
+    expect(schema.tables.Tag.relations.users.junction).toBe("app__User_tags");
+    expect(parseSchema("model User {\n  id: int @id @auto\n}").prefix).toBeUndefined();
+  });
+
+  // 建表语句中的表名、索引名和外键引用都带前缀
+  test.each(["sqlite", "postgres", "mysql"] as const)("%s DDL uses prefixed tables and index names", (dialect) => {
+    const prefixed = ddl(parseSchema(source), dialect);
+    const plain = ddl(parseSchema(source.replace('prefix "app_"\n', "")), dialect);
+    expect(prefixed).toMatch(/CREATE TABLE ["`]app_User["`]/);
+    expect(prefixed).toMatch(/CREATE TABLE ["`]app_labels["`]/);
+    expect(prefixed).toMatch(/CREATE TABLE ["`]app__User_tags["`]/);
+    expect(prefixed).not.toMatch(/["`](User|labels|_User_tags)["`]/);
+    const indexNames = (sql: string) => {
+      return [...sql.matchAll(/INDEX ["`]([^"`]+)["`]/g)].map((m) => {
+        return m[1];
+      });
+    };
+    expect(indexNames(prefixed).length).toBeGreaterThan(0);
+    expect(
+      indexNames(prefixed).filter((name) => {
+        return indexNames(plain).includes(name);
+      }),
+    ).toEqual([]);
+  });
+
+  // ignore 按加前缀后的物理表名判断
+  test("ignore patterns see prefixed names", () => {
+    expect(parseError('prefix "a_"\nignore ["a_*"]\nmodel User {\n  id: int @id @auto\n}').message).toContain("Table a_User matches an ignore pattern");
+    expect(parseSchema('prefix "a_"\nignore ["User"]\nmodel User {\n  id: int @id @auto\n}').prefix).toBe("a_");
+  });
+
+  test.each([
+    ["a duplicate prefix", 'prefix "a_"\nprefix "b_"', "Duplicate prefix"],
+    ["an empty prefix", 'prefix ""', "prefix requires a string"],
+    ["a prefix with symbols", 'prefix "a-b"', "prefix requires a string"],
+    ["a bare identifier", "prefix app", "prefix requires a string"],
+  ])("rejects %s", (_, text, message) => {
+    expect(parseError(text).message).toContain(message);
+  });
+});
+
+describe("ignore", () => {
+  // 顶层 ignore 声明其他系统的表，可多次出现并合并
+  test("collects patterns from every ignore statement", () => {
+    const schema = parseSchema('ignore ["wp_*", "audit_log"]\nmodel User {\n  id: int @id @auto\n}\nignore ["legacy"];');
+    expect(schema.ignore).toEqual(["wp_*", "audit_log", "legacy"]);
+    expect(parseSchema("model User {\n  id: int @id @auto\n}").ignore).toBeUndefined();
+  });
+
+  // * 匹配任意字符，其余字符（包括正则元字符）按字面匹配，不区分大小写
+  test("matches * as a wildcard and everything else literally", () => {
+    const ignored = ignoredTable(["wp_*", "a.b", "*_log"]);
+    expect(["wp_posts", "WP_Posts", "wp_", "a.b", "AUDIT_LOG"].filter(ignored)).toEqual(["wp_posts", "WP_Posts", "wp_", "a.b", "AUDIT_LOG"]);
+    expect(["axb", "wp", "log_x"].some(ignored)).toBeFalse();
+    expect(ignoredTable(undefined)("anything")).toBeFalse();
+  });
+
+  // 模型表、@@map 和隐式多对多中间表都不能落在忽略范围内
+  test.each([
+    ["a model table", 'ignore ["User"]\nmodel User {\n  id: int @id @auto\n}', "Table User matches an ignore pattern"],
+    ["a mapped table", 'ignore ["wp_*"]\nmodel User {\n  id: int @id @auto\n  @@map("wp_users")\n}', "Table wp_users matches an ignore pattern"],
+    ["a junction table", 'ignore ["_*"]\nmodel Post {\n  id: int @id @auto\n  tags: Tag[]\n}\nmodel Tag {\n  id: int @id @auto\n  posts: Post[] @via(tags)\n}', "matches an ignore pattern"],
+    ["an empty list", "ignore []", "ignore requires a non-empty list"],
+    ["a non-string entry", "ignore [1]", "ignore requires a non-empty list"],
+    ["an empty pattern", 'ignore [""]', "ignore requires a non-empty list"],
+    ["a bare string", 'ignore "wp_*"', "ignore requires a non-empty list"],
+    ["a duplicate pattern", 'ignore ["a", "A"]', "Duplicate ignore pattern A"],
+    ["a table differing only in case", 'ignore ["user"]\nmodel User {\n  id: int @id @auto\n}', "Table User matches an ignore pattern"],
   ])("rejects %s", (_, text, message) => {
     expect(parseError(text).message).toContain(message);
   });

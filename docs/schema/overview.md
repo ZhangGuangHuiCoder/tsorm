@@ -80,6 +80,43 @@ Date fields (`datetime` and `timestamp`) accept `now()`; nullable date fields al
 
 `@updatedAt` fields may be omitted on create. On any ORM update (`updateMany`, `upsert`, and nested updates included), the field is set to the current time whenever a field is written; an explicit value always wins. Soft delete and restore leave it unchanged.
 
+## Table Prefix
+
+A top-level `prefix` adds the same prefix to every physical table name; model names and the client API stay the same:
+
+```ts
+prefix "app_"
+
+model User {
+  id: int @id @auto
+}
+```
+
+- The table above is `app_User`; a model with `@@map("users")` becomes `app_users`, and many-to-many junction tables get the prefix too.
+- The prefix may contain only letters, digits and underscores, and a file declares it at most once.
+- Index and foreign key names get the prefix as well, and the migration history table becomes `<prefix>_tsorm_migrations`, so schemas with different prefixes record their migrations separately.
+- `ignore` patterns match the prefixed physical names.
+
+Adding or changing the prefix on an existing database shows up as dropping the old tables and creating new ones; write a rename migration by hand instead.
+
+## Ignoring Tables
+
+Declare the tables this schema does not manage with a top-level `ignore`; migration commands skip them entirely:
+
+```ts
+ignore ["wp_*", "audit_log"]
+
+model User {
+  id: int @id @auto
+}
+```
+
+- Entries are physical table names. `*` matches any run of characters; everything else matches literally, ignoring case.
+- Several `ignore` statements may appear; their patterns are combined.
+- A model table, an `@@map` name or a many-to-many junction table must not match an ignore pattern, or validation fails.
+
+Ignored tables take no part in drift detection, `diff` or `push`, and `migrate --reset` and `push --reset` drop only this schema's tables. See [Ignored Tables](../databases/migrations.md#ignored-tables).
+
 ## Reserved Names
 
 Models and fields cannot use reserved names, including `AND`, `OR`, `NOT`, `_count`, `constructor`, `prototype`, and `__proto__`, nor can they start with `$`. Field names also cannot start with `__orm_`.

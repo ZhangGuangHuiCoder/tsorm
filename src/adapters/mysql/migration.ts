@@ -4,7 +4,7 @@ import { MigrationError } from "../../migrations/errors.js";
 import { parameterValue } from "../../shared/connection.js";
 import type { Connection, Datasource, MigrationProvider, Scratch, Section } from "../../migrations/provider.js";
 import { columnChanges, structuralIndexKey } from "../../migrations/provider.js";
-import { HISTORY_TABLE, leadingIdentifier, splitTopLevel, squash, unquote, type DbModel, type DbTable } from "../../migrations/introspect.js";
+import { historyTable, leadingIdentifier, splitTopLevel, squash, unquote, type DbModel, type DbTable } from "../../migrations/introspect.js";
 import type { TableChange } from "../../migrations/diff.js";
 import { mysqlSchemaSQL } from "./index.js";
 import { isMysqlUrl } from "../urls.js";
@@ -145,7 +145,10 @@ async function connectOrCreate(ds: MysqlDatasource): Promise<{ conn: Connection;
 }
 
 async function clearDatabase(conn: Connection): Promise<void> {
-  const objects = await conn.query("SELECT TABLE_NAME AS name, TABLE_TYPE AS type FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()");
+  const keep = conn.datasource.ignore;
+  const objects = (await conn.query("SELECT TABLE_NAME AS name, TABLE_TYPE AS type FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()")).filter((o) => {
+    return !keep?.(o.name);
+  });
   if (!objects.length) {
     return;
   }
@@ -219,7 +222,7 @@ async function createScratch(base: MysqlDatasource, shadow: Datasource | undefin
 }
 
 async function historyExists(conn: Connection): Promise<boolean> {
-  const rows = await conn.query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [HISTORY_TABLE]);
+  const rows = await conn.query("SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [historyTable(conn)]);
   return rows.length > 0;
 }
 
@@ -236,7 +239,10 @@ const backtickList = (text: string) => {
 
 async function introspect(conn: Connection): Promise<DbModel> {
   const tables: Record<string, DbTable> = {};
-  const names = await conn.query("SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME <> ? ORDER BY TABLE_NAME", [HISTORY_TABLE]);
+  const ignore = conn.datasource.ignore;
+  const names = (await conn.query("SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME <> ? ORDER BY TABLE_NAME", [historyTable(conn)])).filter((row) => {
+    return !ignore?.(row.name);
+  });
   for (const { name } of names) {
     const [row] = await conn.query(`SHOW CREATE TABLE ${quote(name)}`);
     const text: string = row["Create Table"];
@@ -412,7 +418,8 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
   return sections;
 }
 
-const historyDDL = `CREATE TABLE IF NOT EXISTS \`${HISTORY_TABLE}\` (
+const historyDDL = (table: string) => {
+  return `CREATE TABLE IF NOT EXISTS ${quote(table)} (
     \`id\`                    VARCHAR(36) PRIMARY KEY NOT NULL,
     \`checksum\`              VARCHAR(64) NOT NULL,
     \`finished_at\`           DATETIME(3),
@@ -422,6 +429,7 @@ const historyDDL = `CREATE TABLE IF NOT EXISTS \`${HISTORY_TABLE}\` (
     \`started_at\`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     \`applied_steps_count\`   INTEGER UNSIGNED NOT NULL DEFAULT 0
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`;
+};
 
 export const mysqlProvider: MigrationProvider = {
   id: "mysql",

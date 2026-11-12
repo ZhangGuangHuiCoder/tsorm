@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import type { Connection } from "./provider.js";
 import { MigrationError } from "./errors.js";
-import { HISTORY_TABLE } from "./introspect.js";
+import { historyTable } from "./introspect.js";
 
 /** One migration file, `<YYYYMMDDHHMMSS>_<name>.sql`; `name` is the file name without `.sql`. */
 export interface LocalMigration {
@@ -117,7 +117,7 @@ export function historyExists(conn: Connection): Promise<boolean> {
 }
 
 export async function ensureHistory(conn: Connection): Promise<void> {
-  await conn.script(conn.provider.historyDDL);
+  await conn.script(conn.provider.historyDDL(historyTable(conn)));
 }
 
 const text = (value: unknown) => {
@@ -135,7 +135,7 @@ export async function readHistory(conn: Connection): Promise<HistoryRow[]> {
     return [];
   }
   const q = conn.provider.quote;
-  const rows = await conn.query(`SELECT id, checksum, migration_name, logs, started_at, finished_at, rolled_back_at, applied_steps_count FROM ${q(HISTORY_TABLE)} ORDER BY started_at ASC, migration_name ASC`);
+  const rows = await conn.query(`SELECT id, checksum, migration_name, logs, started_at, finished_at, rolled_back_at, applied_steps_count FROM ${q(historyTable(conn))} ORDER BY started_at ASC, migration_name ASC`);
   return rows.map((r) => {
     return {
       id: r.id,
@@ -161,7 +161,7 @@ export async function applyMigration(conn: Connection, migration: LocalMigration
   const q = provider.quote;
   const $ = provider.param;
   const now = provider.now();
-  const table = q(HISTORY_TABLE);
+  const table = q(historyTable(conn));
   const id = randomUUID();
   await conn.query(`INSERT INTO ${table} (id, checksum, migration_name, started_at, applied_steps_count) VALUES (${$(1)}, ${$(2)}, ${$(3)}, ${now}, 0)`, [id, migration.checksum, migration.name]);
   try {
@@ -181,7 +181,7 @@ export async function markApplied(conn: Connection, migration: LocalMigration, f
   const q = provider.quote;
   const $ = provider.param;
   const now = provider.now();
-  const table = q(HISTORY_TABLE);
+  const table = q(historyTable(conn));
   if (failed) {
     await conn.query(`UPDATE ${table} SET rolled_back_at = ${now} WHERE id = ${$(1)}`, [failed.id]);
   }
@@ -191,7 +191,7 @@ export async function markApplied(conn: Connection, migration: LocalMigration, f
 export async function markRolledBack(conn: Connection, row: HistoryRow) {
   const provider = conn.provider;
   const $ = provider.param;
-  await conn.query(`UPDATE ${provider.quote(HISTORY_TABLE)} SET rolled_back_at = ${provider.now()} WHERE id = ${$(1)}`, [row.id]);
+  await conn.query(`UPDATE ${provider.quote(historyTable(conn))} SET rolled_back_at = ${provider.now()} WHERE id = ${$(1)}`, [row.id]);
 }
 
 /** Serializes migration runs against one database with an advisory lock. */

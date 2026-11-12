@@ -7,7 +7,7 @@ import type { Adapter, RuntimeAdapter } from "../../core/adapter.js";
 import pg from "pg";
 import { connectionURL } from "../../shared/connection.js";
 import { createHash } from "node:crypto";
-import { columnName, referentialActions, tableName, type Schema, type Table, type Column } from "../../schema/index.js";
+import { columnName, objectName, referentialActions, tableName, type Schema, type Table, type Column } from "../../schema/index.js";
 function encode(c: Column, value: any): any {
   const validated = encodeScalar(c, value);
   if (c.type === "bytes" && validated !== null) {
@@ -130,20 +130,20 @@ export function postgresSchemaSQL(schema: Schema): string[] {
     }
     tables.push(`CREATE TABLE ${q(tableName(t))} (${defs.join(", ")})`);
     for (const keys of t.indexes) {
-      indexes.push(`CREATE INDEX ${q(name(t.name, ...keys))} ON ${q(tableName(t))} (${keys.map(col).join(",")})`);
+      indexes.push(`CREATE INDEX ${q(name(objectName(t), ...keys))} ON ${q(tableName(t))} (${keys.map(col).join(",")})`);
     }
     for (const r of Object.values(t.relations)) {
       if (r.owner && !r.many && !r.polymorphic) {
         const target = schema.tables[r.target];
         constraints.push(
-          `ALTER TABLE ${q(tableName(t))} ADD CONSTRAINT ${q(name(t.name, r.name, "fk"))} FOREIGN KEY (${col(r.source)}) REFERENCES ${q(tableName(target))} (${q(columnName(target.columns[r.foreign]))}) ON DELETE ${referentialActions[r.onDelete ?? "Restrict"]} ON UPDATE ${referentialActions[r.onUpdate ?? "Restrict"]}`,
+          `ALTER TABLE ${q(tableName(t))} ADD CONSTRAINT ${q(name(objectName(t), r.name, "fk"))} FOREIGN KEY (${col(r.source)}) REFERENCES ${q(tableName(target))} (${q(columnName(target.columns[r.foreign]))}) ON DELETE ${referentialActions[r.onDelete ?? "Restrict"]} ON UPDATE ${referentialActions[r.onUpdate ?? "Restrict"]}`,
         );
       }
     }
     // 关系列索引与外键约束解耦：morph 与普通外键列一律建索引，命名只描述“关系列”。
     for (const r of Object.values(t.relations)) {
       if (r.owner && !r.many && !t.columns[r.source].unique) {
-        indexes.push(`CREATE INDEX ${q(name(t.name, r.source, "relidx"))} ON ${q(tableName(t))} (${col(r.source)})`);
+        indexes.push(`CREATE INDEX ${q(name(objectName(t), r.source, "relidx"))} ON ${q(tableName(t))} (${col(r.source)})`);
       }
     }
   }
