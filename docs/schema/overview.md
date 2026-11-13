@@ -104,7 +104,7 @@ Adding or changing the prefix on an existing database shows up as dropping the o
 Declare the tables this schema does not manage with a top-level `ignore`; migration commands skip them entirely:
 
 ```ts
-ignore ["wp_*", "audit_log"]
+ignore ["legacy_*", "misc"]
 
 model User {
   id: int @id @auto

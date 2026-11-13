@@ -23,6 +23,12 @@ export async function resetData(db: Db): Promise<void> {
   await db.$clear("slot", { force: true });
   await db.$clear("entry", { force: true });
   await db.$clear("account", { force: true });
+  await db.$clear("restrictChild", { force: true });
+  await db.$clear("restrictParent", { force: true });
+  await db.$clear("noActionChild", { force: true });
+  await db.$clear("noActionParent", { force: true });
+  await db.$clear("keyedChild", { force: true });
+  await db.$clear("keyedParent", { force: true });
 }
 
 export interface Context {

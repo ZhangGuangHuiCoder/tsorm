@@ -6,7 +6,7 @@ import type { Connection, Datasource, MigrationProvider, Scratch, Section } from
 import { columnChanges, structuralIndexKey } from "../../migrations/provider.js";
 import { historyTable, leadingIdentifier, splitTopLevel, squash, unquote, type DbModel, type DbTable } from "../../migrations/introspect.js";
 import type { TableChange } from "../../migrations/diff.js";
-import { mysqlSchemaSQL } from "./index.js";
+import { literal, mysqlSchemaSQL } from "./index.js";
 import { isMysqlUrl } from "../urls.js";
 import { quoteMysqlIdentifier } from "../../query/identifiers.js";
 
@@ -236,6 +236,10 @@ const backtickList = (text: string) => {
     return unquote(part.replace(/\(\d+\)$/, "").trim());
   });
 };
+/** SHOW CREATE TABLE 里的注释文本：单引号 doubling 转义。 */
+const commentIn = (text: string, separator = " ") => {
+  return new RegExp(`\\bCOMMENT${separator}'((?:[^']|'')*)'`).exec(text)?.[1].replaceAll("''", "'");
+};
 
 async function introspect(conn: Connection): Promise<DbModel> {
   const tables: Record<string, DbTable> = {};
@@ -268,6 +272,7 @@ async function introspect(conn: Connection): Promise<DbModel> {
       checks: [],
       foreignKeys: [],
       definition: "",
+      comment: commentIn(tail, "="),
     };
     const kept: string[] = [];
     for (const item of items) {
@@ -282,6 +287,7 @@ async function introspect(conn: Connection): Promise<DbModel> {
           default: /\bDEFAULT (.+?)(?: (?:ON UPDATE|COMMENT|CHECK|COLLATE)\b|$)/.exec(definition)?.[1] ?? null,
           auto: /\bAUTO_INCREMENT\b/.test(definition),
           definition: item,
+          comment: commentIn(definition),
         });
         kept.push(item);
       } else if ((m = /^PRIMARY KEY \((.*)\)/.exec(item))) {
@@ -383,6 +389,9 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
     }
     for (const k of c.addedChecks) {
       statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${quote(k.name)} CHECK ${k.expression};`);
+    }
+    if (c.comment) {
+      statements.push(`ALTER TABLE ${t} COMMENT=${c.to.comment ? literal(c.to.comment) : "''"};`);
     }
     push("AlterTable", statements);
   }

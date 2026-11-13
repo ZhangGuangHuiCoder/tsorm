@@ -47,6 +47,8 @@ export interface Column {
   dateStorage?: "string" | "timestamp";
   /** Physical column name (@map). */
   map?: string;
+  /** Column comment from the trailing // comment on the field line; MySQL/PostgreSQL only, SQLite ignores it. */
+  comment?: string;
 }
 export interface Relation {
   name: string;
@@ -80,6 +82,8 @@ export interface Table {
   primaryKey?: string[];
   /** Physical table name (@@map). */
   map?: string;
+  /** Table comment from the // comment lines preceding the model; MySQL/PostgreSQL only, SQLite ignores it. */
+  comment?: string;
   /** Global table prefix from the top-level `prefix` statement; prepended to the physical name. */
   prefix?: string;
   unique: string[][];
@@ -165,8 +169,14 @@ type Token = {
   line: number;
   column: number;
 };
-function lex(input: string): Token[] {
+type Comment = {
+  text: string;
+  line: number;
+  column: number;
+};
+function lex(input: string): { tokens: Token[]; comments: Comment[] } {
   const tokens: Token[] = [];
+  const comments: Comment[] = [];
   let i = 0;
   let line = 1;
   let column = 1;
@@ -183,13 +193,20 @@ function lex(input: string): Token[] {
   };
   while (i < input.length) {
     const rest = input.slice(i);
-    const ignored = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)/.exec(rest);
+    const ignored = /^(?:\s+|\/\*[\s\S]*?\*\/)/.exec(rest);
     if (ignored) {
       advance(ignored[0]);
       continue;
     }
     let match: RegExpExecArray | null;
-    if ((match = /^"(?:\\.|[^"\\])*"/.exec(rest))) {
+    if ((match = /^\/\/[^\n]*/.exec(rest))) {
+      // 斜杠注释保留文本与位置，供解析器附着为表/列注释；块注释仍直接跳过。
+      const text = match[0].slice(2).trim();
+      if (text) {
+        comments.push({ text, line, column });
+      }
+      advance(match[0]);
+    } else if ((match = /^"(?:\\.|[^"\\])*"/.exec(rest))) {
       const raw = match[0];
       let value: string;
       try {
@@ -213,7 +230,7 @@ function lex(input: string): Token[] {
     }
   }
   tokens.push({ value: "<EOF>", kind: "symbol", line, column });
-  return tokens;
+  return { tokens, comments };
 }
 type Attribute = {
   name: string;
@@ -237,21 +254,50 @@ type Field = {
   enum?: string[];
   /** morph 字段：两个绑定列名；空数组表示全部隐式生成。 */
   morph?: string[];
+  /** 字段行尾 // 注释，附着到对应列。 */
+  comment?: string;
 };
 type Model = {
   name: string;
   fields: Field[];
   attrs: Attribute[];
+  /** 模型前紧邻的 // 注释行。 */
+  comment?: string;
 };
+/** 收集模式的恢复信号：error() 已记录错误， unwind 到最近的恢复点。 */
+const resume = Symbol("schema-error");
 export function parseSchema(input: string): Schema {
-  const tokens = lex(input);
+  return parse(input, false, []);
+}
+/** 收集错误而不是遇错即抛：顶层语句之间恢复，供编辑器诊断一次报出多个错误。 */
+export function schemaErrors(input: string): SchemaError[] {
+  const errors: SchemaError[] = [];
+  try {
+    parse(input, true, errors);
+  } catch (e) {
+    if (e instanceof SchemaError) {
+      // 词法错误没有恢复点，原样记录。
+      errors.push(e);
+    } else if (e !== resume) {
+      throw e;
+    }
+  }
+  return errors;
+}
+function parse(input: string, recover: boolean, errors: SchemaError[]): Schema {
+  const { tokens, comments } = lex(input);
   let p = 0;
   const peek = () => {
     return tokens[p] ?? tokens[tokens.length - 1];
   };
   const error = (message: string, token = peek()): never => {
     const location = token ?? tokens[tokens.length - 1];
-    throw new SchemaError(message, location.line, location.column);
+    const failure = new SchemaError(message, location.line, location.column);
+    if (!recover) {
+      throw failure;
+    }
+    errors.push(failure);
+    throw resume;
   };
   const eat = (s: string) => {
     if (peek().value === s) {
@@ -264,6 +310,16 @@ export function parseSchema(input: string): Schema {
     if (!eat(s)) {
       error(`Expected ${s}, got ${peek().value}`);
     }
+  };
+  const precedes = (a: { line: number; column: number }, b: { line: number; column: number }) => {
+    return a.line < b.line || (a.line === b.line && a.column < b.column);
+  };
+  // MySQL 列注释上限 1024 字符，表注释更宽；取更严的列上限保证三个方言行为一致。
+  const checkComment = (text: string, at: { line: number; column: number }) => {
+    if (text.length > 1024) {
+      error("Comment must be at most 1024 characters", { value: "//", kind: "symbol", line: at.line, column: at.column });
+    }
+    return text;
   };
   const ident = () => {
     const t = peek();
@@ -401,174 +457,220 @@ export function parseSchema(input: string): Schema {
   const ignoreKeys = new Set<string>();
   let prefix = "";
   while (peek().value !== "<EOF>") {
-    if (peek().value === "prefix" && peek().kind === "id") {
-      const token = tokens[p++];
-      const name = peek();
-      if (prefix) {
-        error("Duplicate prefix", token);
-      }
-      if (name.kind !== "string" || !/^[A-Za-z0-9_]+$/.test(name.value)) {
-        error("prefix requires a string of letters, digits and underscores", token);
-      }
-      p++;
-      prefix = name.value;
-      eat(";");
-      continue;
-    }
-    if (peek().value === "ignore" && peek().kind === "id") {
-      const token = tokens[p++];
-      const list = value();
-      if (
-        !Array.isArray(list) ||
-        !list.length ||
-        list.some((x) => {
-          return typeof x !== "string" || !x || x.includes("\0");
-        })
-      ) {
-        error("ignore requires a non-empty list of table name strings", token);
-      }
-      for (const pattern of list as string[]) {
-        if (ignoreKeys.has(pattern.toLowerCase())) {
-          error("Duplicate ignore pattern " + pattern, token);
+    const start = p;
+    try {
+      if (peek().value === "prefix" && peek().kind === "id") {
+        const token = tokens[p++];
+        const name = peek();
+        if (prefix) {
+          error("Duplicate prefix", token);
         }
-        ignore.push(pattern);
-        ignoreKeys.add(pattern.toLowerCase());
-      }
-      eat(";");
-      continue;
-    }
-    if (eat("type")) {
-      const name = ident();
-      if (Object.hasOwn(jsonTypes, name)) {
-        error("Duplicate JSON type " + name);
-      }
-      expect("=");
-      jsonTypes[name] = jsonShape();
-      eat(";");
-      continue;
-    }
-    expect("model");
-    const name = ident();
-    expect("{");
-    const fields: Field[] = [];
-    const attrs: Attribute[] = [];
-    while (!eat("}")) {
-      if (peek().value === "<EOF>") {
-        error("Unclosed model");
-      }
-      if (eat("@")) {
-        expect("@");
-        attrs.push(attribute());
+        if (name.kind !== "string" || !/^[A-Za-z0-9_]+$/.test(name.value)) {
+          error("prefix requires a string of letters, digits and underscores", token);
+        }
+        p++;
+        prefix = name.value;
         eat(";");
         continue;
       }
-      const token = peek();
-      const name = ident();
-      const nullable = eat("?");
-      expect(":");
-      let type: string;
-      let choices: string[] | undefined;
-      if (peek().kind === "string") {
-        choices = [tokens[p++].value];
-        while (eat("|")) {
-          if (peek().kind !== "string") {
-            error("Enum members must be strings");
-          }
-          choices.push(tokens[p++].value);
+      if (peek().value === "ignore" && peek().kind === "id") {
+        const token = tokens[p++];
+        const list = value();
+        if (
+          !Array.isArray(list) ||
+          !list.length ||
+          list.some((x) => {
+            return typeof x !== "string" || !x || x.includes("\0");
+          })
+        ) {
+          error("ignore requires a non-empty list of table name strings", token);
         }
-        type = "string";
-      } else {
-        type = ident();
+        for (const pattern of list as string[]) {
+          if (ignoreKeys.has(pattern.toLowerCase())) {
+            error("Duplicate ignore pattern " + pattern, token);
+          }
+          ignore.push(pattern);
+          ignoreKeys.add(pattern.toLowerCase());
+        }
+        eat(";");
+        continue;
       }
-      const dateStorage = type === "timestamp" ? ("timestamp" as const) : undefined;
-      if (dateStorage) {
-        type = "datetime";
+      if (eat("type")) {
+        const name = ident();
+        if (Object.hasOwn(jsonTypes, name)) {
+          error("Duplicate JSON type " + name);
+        }
+        expect("=");
+        jsonTypes[name] = jsonShape();
+        eat(";");
+        continue;
       }
-      // morph 是标量与模型之外的第三种字段：绑定判别列与主键列，或全部隐式生成。
-      let morph: string[] | undefined;
-      if (type === "morph") {
-        morph = [];
-        if (eat("(")) {
-          for (let i = 0; i < 2; i++) {
-            // 参数个数不对时给出 morph 专用消息，而不是 expect(',') 的通用报错。
-            if (i && !eat(",")) {
-              error("morph takes two column names or none", token);
+      expect("model");
+      const name = ident();
+      expect("{");
+      const fields: Field[] = [];
+      const attrs: Attribute[] = [];
+      while (!eat("}")) {
+        if (peek().value === "<EOF>") {
+          error("Unclosed model");
+        }
+        if (eat("@")) {
+          expect("@");
+          attrs.push(attribute());
+          eat(";");
+          continue;
+        }
+        const token = peek();
+        const name = ident();
+        const nullable = eat("?");
+        expect(":");
+        let type: string;
+        let choices: string[] | undefined;
+        if (peek().kind === "string") {
+          choices = [tokens[p++].value];
+          while (eat("|")) {
+            if (peek().kind !== "string") {
+              error("Enum members must be strings");
             }
-            if (peek().kind !== "id") {
-              error("morph takes two column names or none", token);
+            choices.push(tokens[p++].value);
+          }
+          type = "string";
+        } else {
+          type = ident();
+        }
+        const dateStorage = type === "timestamp" ? ("timestamp" as const) : undefined;
+        if (dateStorage) {
+          type = "datetime";
+        }
+        // morph 是标量与模型之外的第三种字段：绑定判别列与主键列，或全部隐式生成。
+        let morph: string[] | undefined;
+        if (type === "morph") {
+          morph = [];
+          if (eat("(")) {
+            for (let i = 0; i < 2; i++) {
+              // 参数个数不对时给出 morph 专用消息，而不是 expect(',') 的通用报错。
+              if (i && !eat(",")) {
+                error("morph takes two column names or none", token);
+              }
+              if (peek().kind !== "id") {
+                error("morph takes two column names or none", token);
+              }
+              morph.push(ident());
             }
-            morph.push(ident());
+            expect(")");
+          }
+        }
+        let json: JsonShape | undefined;
+        if (type === "json" && !morph) {
+          expect("<");
+          json = jsonShape();
+          expect(">");
+        }
+        let maxLength: number | undefined;
+        let precision: number | undefined;
+        let scale: number | undefined;
+        if (!morph && eat("(")) {
+          if (type === "decimal") {
+            precision = Number(tokens[p++].value);
+            expect(",");
+            scale = Number(tokens[p++].value);
+            if (!Number.isInteger(precision) || !Number.isInteger(scale) || precision < 1 || precision > 65 || scale < 0 || scale > Math.min(30, precision)) {
+              error("decimal(precision, scale) requires 1 <= precision <= 65 and 0 <= scale <= min(30, precision)");
+            }
+          } else {
+            if (type !== "string") {
+              error("Only string supports a length");
+            }
+            maxLength = Number(tokens[p++].value);
+            if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 16383) {
+              error("String length must be 1..16383");
+            }
           }
           expect(")");
         }
-      }
-      let json: JsonShape | undefined;
-      if (type === "json" && !morph) {
-        expect("<");
-        json = jsonShape();
-        expect(">");
-      }
-      let maxLength: number | undefined;
-      let precision: number | undefined;
-      let scale: number | undefined;
-      if (!morph && eat("(")) {
-        if (type === "decimal") {
-          precision = Number(tokens[p++].value);
-          expect(",");
-          scale = Number(tokens[p++].value);
-          if (!Number.isInteger(precision) || !Number.isInteger(scale) || precision < 1 || precision > 65 || scale < 0 || scale > Math.min(30, precision)) {
-            error("decimal(precision, scale) requires 1 <= precision <= 65 and 0 <= scale <= min(30, precision)");
-          }
-        } else {
-          if (type !== "string") {
-            error("Only string supports a length");
-          }
-          maxLength = Number(tokens[p++].value);
-          if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 16383) {
-            error("String length must be 1..16383");
-          }
+        let many = false;
+        if (eat("[")) {
+          expect("]");
+          many = true;
         }
-        expect(")");
-      }
-      let many = false;
-      if (eat("[")) {
-        expect("]");
-        many = true;
-      }
-      const f: Field = {
-        name,
-        type,
-        nullable,
-        many,
-        attrs: [],
-        token,
-        json,
-        maxLength: maxLength ?? (type === "string" ? defaultStringLength : undefined),
-        precision,
-        scale,
-        enum: choices,
-        dateStorage,
-        morph,
-      };
-      if (eat("=")) {
-        f.default = value();
-      }
-      while (peek().value === "@" && tokens[p + 1].value !== "@") {
-        expect("@");
-        const a = attribute();
-        if (
-          f.attrs.some((x) => {
-            return x.name === a.name;
-          })
-        ) {
-          error(`Duplicate @${a.name}`, token);
+        const f: Field = {
+          name,
+          type,
+          nullable,
+          many,
+          attrs: [],
+          token,
+          json,
+          maxLength: maxLength ?? (type === "string" ? defaultStringLength : undefined),
+          precision,
+          scale,
+          enum: choices,
+          dateStorage,
+          morph,
+        };
+        if (eat("=")) {
+          f.default = value();
         }
-        f.attrs.push(a);
+        while (peek().value === "@" && tokens[p + 1].value !== "@") {
+          expect("@");
+          const a = attribute();
+          if (
+            f.attrs.some((x) => {
+              return x.name === a.name;
+            })
+          ) {
+            error(`Duplicate @${a.name}`, token);
+          }
+          f.attrs.push(a);
+        }
+        eat(";");
+        // 字段行尾的 // 注释作为列注释；独立成行的注释不附着。
+        const end = tokens[p - 1];
+        const trailing = comments.find((c) => {
+          return c.line === end.line && precedes(end, c);
+        });
+        if (trailing) {
+          f.comment = checkComment(trailing.text, trailing);
+        }
+        fields.push(f);
       }
-      eat(";");
-      fields.push(f);
+      // 模型前紧邻的 // 注释行（与上一语句之间无其他 token）作为表注释，多行以换行拼接。
+      const leading = comments.filter((c) => {
+        return (!tokens[start - 1] || precedes(tokens[start - 1], c)) && precedes(c, tokens[start]);
+      });
+      const tableComment = leading
+        .map((c) => {
+          return c.text;
+        })
+        .join("\n");
+      models.push({ name, fields, attrs, ...(tableComment ? { comment: checkComment(tableComment, leading[0]) } : {}) });
+    } catch (e) {
+      if (e !== resume) {
+        throw e;
+      }
+      // 跳过受损语句直到下一个顶层关键字，半截模型的剩余部分不再继续解析。
+      let depth = 0;
+      p = start;
+      while (p < tokens.length && tokens[p].value !== "<EOF>") {
+        const t = tokens[p];
+        if (p > start && depth === 0 && t.kind === "id" && ["model", "type", "prefix", "ignore"].includes(t.value)) {
+          break;
+        }
+        if (["{", "(", "[", "<"].includes(t.value)) {
+          depth++;
+        } else if (["}", ")", "]", ">"].includes(t.value)) {
+          depth = Math.max(0, depth - 1);
+        }
+        p++;
+      }
+      if (p === start) {
+        p++;
+      }
     }
-    models.push({ name, fields, attrs });
+  }
+  if (recover && errors.length) {
+    // 语法错误已收集；跳过语义校验，避免缺失模型引发连环的 Unknown model 报错。
+    return { version: 1, tables: Object.create(null) };
   }
   const generatedNames = new Set<string>();
   for (const model of models) {
@@ -721,6 +823,9 @@ export function parseSchema(input: string): Schema {
     if (tableMap) {
       t.map = tableMap;
     }
+    if (m.comment) {
+      t.comment = m.comment;
+    }
     if (prefix) {
       t.prefix = prefix;
     }
@@ -762,6 +867,7 @@ export function parseSchema(input: string): Schema {
         ...(f.precision !== undefined ? { precision: f.precision, scale: f.scale } : {}),
         ...(get(f, "updatedAt") ? { updatedAt: true } : {}),
         ...(get(f, "map") ? { map: mapName(get(f, "map"), f.token) } : {}),
+        ...(f.comment ? { comment: f.comment } : {}),
         ...(f.json ? { json: { root: f.json, definitions: jsonTypes } } : {}),
       };
       if (col.updatedAt && (col.type !== "datetime" || f.default !== undefined || col.primary || col.unique)) {
@@ -1001,6 +1107,7 @@ export function parseSchema(input: string): Schema {
           auto: false,
           unique: !!get(f, "unique"),
           ...(f.nullable ? { default: null } : {}),
+          ...(f.comment ? { comment: f.comment } : {}),
         };
       }
       if (

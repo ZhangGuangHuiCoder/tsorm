@@ -63,7 +63,7 @@ async function packageVscode(): Promise<void> {
   await Promise.all([syncVersion(), syncLicense()]);
   await mkdir("artifacts", { recursive: true });
   // vsce 必须在扩展目录里运行，从根 node_modules 取，路径用 ../ 换算过去。
-  await run(process.execPath, [`../${vsceBin}`, "package", "--no-dependencies", "--allow-missing-repository", "--out", `../${artifactFile}`], extensionDir);
+  await run(process.execPath, [`../${vsceBin}`, "package", "--no-dependencies", "--out", `../${artifactFile}`], extensionDir);
 }
 
 /** 全仓类型检查：除 src 外还覆盖 examples、test/fixtures、scripts 与文档配置，不产出文件。 */

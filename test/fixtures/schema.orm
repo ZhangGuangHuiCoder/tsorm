@@ -1,10 +1,15 @@
 // 测试用模型，覆盖常见关联与特性场景：一对多、一对一、多对多、自关联、
-// 复合键、参照动作、软删除、类型化 JSON、枚举、多态（morph）以及全部标量类型。
+// 复合键、参照动作、软删除、类型化 JSON、枚举、多态（morph）、注释以及全部标量类型。
 // 修改后运行 `bun run example`（不带数据库参数）重新生成 test/fixtures/client.ts。
 
+// prefix 作用于全部物理表名（含 @@map 与多对多中间表）；ignore 声明外部系统的表，模式不匹配任何模型表。
+prefix "app_"
+ignore ["legacy_*", "misc"]
+
+// 用户表
 model User {
   id: int @id @auto
-  email: string @unique
+  email: string @unique // 登录邮箱
   name?: string
   role: "admin" | "member" = "member"
   age?: int
@@ -25,9 +30,10 @@ model Profile {
   user: User @unique @relation(onDelete: Cascade)
 }
 
+// 文章
 model Post {
   id: int @id @auto
-  title: string(200)
+  title: string(200) // 标题
   content?: text
   published: boolean = false
   views: int = 0
@@ -71,10 +77,11 @@ model Membership {
   @@id(organization, email)
 }
 
+// 商品
 model Product {
   id: string(36) = uuid() @id
   sku: string(32) @unique @map("product_sku")
-  price: decimal(10, 2)
+  price: decimal(10, 2) // 单价
   stock: bigint = 0
   payload?: bytes
   active: boolean = true
@@ -135,4 +142,37 @@ model Note {
   holder: morph
 
   @@index(holderType, holderId)
+}
+
+// 参照动作补全：显式 Restrict、NoAction，以及自然键主键上的 onUpdate Cascade。
+model RestrictParent {
+  id: int @id @auto
+  name: string
+  children: RestrictChild[] @via(parent)
+}
+
+model RestrictChild {
+  id: int @id @auto
+  parent: RestrictParent @relation(onDelete: Restrict)
+}
+
+model NoActionParent {
+  id: int @id @auto
+  name: string
+  children: NoActionChild[] @via(parent)
+}
+
+model NoActionChild {
+  id: int @id @auto
+  parent: NoActionParent @relation(onDelete: NoAction)
+}
+
+model KeyedParent {
+  code: string(32) @id
+  children: KeyedChild[] @via(parent)
+}
+
+model KeyedChild {
+  id: int @id @auto
+  parent: KeyedParent @relation(onUpdate: Cascade)
 }

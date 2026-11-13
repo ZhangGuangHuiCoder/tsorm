@@ -10,10 +10,13 @@ The extension adds editing support for `.orm` model files. It bundles its own pa
 
 - Syntax highlighting
 - Document formatting that preserves comments, strings, trailing comments, and single blank lines between fields
-- Live diagnostics based on the ORM parser
-- Hover documentation with an example for every keyword
-- Go to definition within the current file: models, the owner field named by `@via(x)`, and fields referenced from `@relation(field: x)`, `@@index(...)`, and similar attributes
-- Completion for models, field types, attributes, default functions, relation fields, `@via`, `@relation` options, and typed JSON, each entry documented with a schema example
+- Live diagnostics based on the ORM parser, reporting several errors at once when they sit in different statements
+- Hover documentation with an example for every keyword, plus model field lists, JSON type alias declarations, and field declarations
+- Go to definition within the current file: models, JSON type aliases, the owner field named by `@via(x)`, and fields referenced from `@relation(field: x)`, `@@index(...)`, and similar attributes
+- Completion for models, JSON type aliases, field types, attributes, default functions, relation fields, `@via`, `@relation` options, and typed JSON, each entry documented with a schema example
+- Outline and breadcrumbs: models with their fields, plus JSON type aliases; workspace symbol search finds models and aliases across `.orm` files
+- Find all references and rename for models, JSON type aliases, and fields, covering `@via`, `@relation(field: ...)`, `morph(...)` bindings, and model-level attributes across the workspace
+- Quick fix on diagnostics: complete missing relation declarations without formatting the whole file
 
 Field attributes are filtered by the field's type and shape, so a scalar field never offers `@relation` or `@via`.
 
@@ -33,6 +36,8 @@ When an array relation has no back relation in the target model at all, the whol
 When a model declares a back relation with `@via(name)` and the target model has no `name` field yet, the owner side is created in the target model, for example `account: A`.
 
 When the model already declares the column the parser would generate for a relation, the relation field gets `@relation(field: ...)`.
+
+The same completion is available as a quick fix on parser diagnostics, so it can be applied without formatting the file.
 
 ## Installation
 
@@ -58,6 +63,14 @@ Add to `settings.json`:
 ```
 
 Formatting first attempts relation completion, then parses the result. If diagnostics remain and formatting fails, fix those errors first.
+
+To keep formatting layout-only, disable relation completion:
+
+```json
+{
+  "tsorm.format.completeRelations": false
+}
+```
 
 ## Development
 

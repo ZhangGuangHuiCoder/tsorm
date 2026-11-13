@@ -73,7 +73,7 @@ const sqlType = (c: Column) => {
     bytes: "BYTEA",
   }[c.type];
 };
-const literal = (v: any) => {
+export const literal = (v: any) => {
   if (v === null) {
     return "NULL";
   }
@@ -90,6 +90,7 @@ const name = (...parts: string[]) => {
 };
 export function postgresSchemaSQL(schema: Schema): string[] {
   const tables: string[] = [];
+  const comments: string[] = [];
   const constraints: string[] = [];
   const indexes: string[] = [];
   const validateName = (s: string) => {
@@ -129,6 +130,15 @@ export function postgresSchemaSQL(schema: Schema): string[] {
       defs.push(`UNIQUE (${keys.map(col).join(",")})`);
     }
     tables.push(`CREATE TABLE ${q(tableName(t))} (${defs.join(", ")})`);
+    // PostgreSQL 的注释是独立语句，建表后统一发出。
+    if (t.comment) {
+      comments.push(`COMMENT ON TABLE ${q(tableName(t))} IS ${literal(t.comment)}`);
+    }
+    for (const c of Object.values(t.columns)) {
+      if (c.comment) {
+        comments.push(`COMMENT ON COLUMN ${q(tableName(t))}.${q(columnName(c))} IS ${literal(c.comment)}`);
+      }
+    }
     for (const keys of t.indexes) {
       indexes.push(`CREATE INDEX ${q(name(objectName(t), ...keys))} ON ${q(tableName(t))} (${keys.map(col).join(",")})`);
     }
@@ -162,7 +172,7 @@ export function postgresSchemaSQL(schema: Schema): string[] {
       }
     }
   }
-  return [...tables, ...constraints, ...indexes];
+  return [...tables, ...comments, ...constraints, ...indexes];
 }
 
 export interface PostgresConnection {

@@ -12,7 +12,7 @@ eachDatabase("raw sql", (ctx) => {
   test("$queryRaw binds interpolations as parameters", async () => {
     await makeUser(ctx.db, { email: "o'brien@x.com", name: "Quote" });
     const email = "o'brien@x.com";
-    const rows = mysqlLike() ? await ctx.db.$queryRaw<{ name: string }[]>`SELECT name FROM \`User\` WHERE email = ${email}` : await ctx.db.$queryRaw<{ name: string }[]>`SELECT name FROM "User" WHERE email = ${email}`;
+    const rows = mysqlLike() ? await ctx.db.$queryRaw<{ name: string }[]>`SELECT name FROM \`app_User\` WHERE email = ${email}` : await ctx.db.$queryRaw<{ name: string }[]>`SELECT name FROM "app_User" WHERE email = ${email}`;
     expect(rows).toEqual([{ name: "Quote" }]);
   });
 
@@ -20,14 +20,14 @@ eachDatabase("raw sql", (ctx) => {
   test("injection attempts stay inert values", async () => {
     await makeUser(ctx.db);
     const evil = "x' OR '1'='1";
-    const rows = mysqlLike() ? await ctx.db.$queryRaw<unknown[]>`SELECT id FROM \`User\` WHERE email = ${evil}` : await ctx.db.$queryRaw<unknown[]>`SELECT id FROM "User" WHERE email = ${evil}`;
+    const rows = mysqlLike() ? await ctx.db.$queryRaw<unknown[]>`SELECT id FROM \`app_User\` WHERE email = ${evil}` : await ctx.db.$queryRaw<unknown[]>`SELECT id FROM "app_User" WHERE email = ${evil}`;
     expect(rows).toEqual([]);
   });
 
   // $executeRaw 返回受影响行数
   test("$executeRaw returns the affected row count", async () => {
     await ctx.db.user.createMany({ data: [{ email: "a@x.com" }, { email: "b@x.com" }] });
-    const affected = mysqlLike() ? await ctx.db.$executeRaw`UPDATE \`User\` SET name = ${"raw"} WHERE email LIKE ${"%@x.com"}` : await ctx.db.$executeRaw`UPDATE "User" SET name = ${"raw"} WHERE email LIKE ${"%@x.com"}`;
+    const affected = mysqlLike() ? await ctx.db.$executeRaw`UPDATE \`app_User\` SET name = ${"raw"} WHERE email LIKE ${"%@x.com"}` : await ctx.db.$executeRaw`UPDATE "app_User" SET name = ${"raw"} WHERE email LIKE ${"%@x.com"}`;
     expect(affected).toBe(2);
     expect(await ctx.db.user.count({ where: { name: "raw" } })).toBe(2);
   });
@@ -43,14 +43,14 @@ eachDatabase("raw sql", (ctx) => {
     });
     const low = sql`age >= ${15}`;
     const high = sql`age <= ${25}`;
-    const query = mysqlLike() ? sql`SELECT email FROM \`User\` WHERE ${low} AND ${high}` : sql`SELECT email FROM "User" WHERE ${low} AND ${high}`;
+    const query = mysqlLike() ? sql`SELECT email FROM \`app_User\` WHERE ${low} AND ${high}` : sql`SELECT email FROM "app_User" WHERE ${low} AND ${high}`;
     expect(await ctx.db.$queryRaw<{ email: string }[]>(query)).toEqual([{ email: "b@x.com" }]);
   });
 
   // 原生 SQL 中使用 @map 后的物理名
   test("@map names are the physical names in raw SQL", async () => {
     await ctx.db.product.create({ data: { sku: "MAPPED", price: 1 } });
-    const rows = mysqlLike() ? await ctx.db.$queryRaw<{ product_sku: string }[]>`SELECT product_sku FROM products` : await ctx.db.$queryRaw<{ product_sku: string }[]>`SELECT product_sku FROM products`;
+    const rows = mysqlLike() ? await ctx.db.$queryRaw<{ product_sku: string }[]>`SELECT product_sku FROM app_products` : await ctx.db.$queryRaw<{ product_sku: string }[]>`SELECT product_sku FROM app_products`;
     expect(rows).toEqual([{ product_sku: "MAPPED" }]);
   });
 
@@ -65,8 +65,8 @@ eachDatabase("raw sql", (ctx) => {
   test("raw SQL errors are mapped to OrmError codes", async () => {
     await makeUser(ctx.db, { email: "dup@x.com" });
     const insert = mysqlLike()
-      ? ctx.db.$executeRaw`INSERT INTO \`User\` (email, role, createdAt, updatedAt) VALUES (${"dup@x.com"}, 'member', ${"2026-01-01 00:00:00"}, ${"2026-01-01 00:00:00"})`
-      : ctx.db.$executeRaw`INSERT INTO "User" (email, role, "createdAt", "updatedAt") VALUES (${"dup@x.com"}, 'member', ${"2026-01-01 00:00:00"}, ${"2026-01-01 00:00:00"})`;
+      ? ctx.db.$executeRaw`INSERT INTO \`app_User\` (email, role, createdAt, updatedAt) VALUES (${"dup@x.com"}, 'member', ${"2026-01-01 00:00:00"}, ${"2026-01-01 00:00:00"})`
+      : ctx.db.$executeRaw`INSERT INTO "app_User" (email, role, "createdAt", "updatedAt") VALUES (${"dup@x.com"}, 'member', ${"2026-01-01 00:00:00"}, ${"2026-01-01 00:00:00"})`;
     await expectOrmError(insert, "UNIQUE_CONSTRAINT");
   });
 });

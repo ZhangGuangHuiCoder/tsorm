@@ -33,6 +33,7 @@ description: SQLite 适配器基于 Node.js 内置的 node:sqlite，单连接同
 - `bigint` 模型字段返回十进制字符串；`int` 模型字段经过安全整数范围检查后返回 `number`。
 - `datetime` 存储本地时间文本，`timestamp` 存储 Unix 毫秒整数；两者均按 `datetimeFormat` 解码，见[日期与时区](../../client/datetime.md)。
 - `string` 列由 `CHECK` 约束校验长度，省略长度时按 191 个字符处理，并且可以建立索引；`text` 列是不带长度校验的 `TEXT`，不能作为键或索引。非唯一外键列会自动添加索引。
+- SQLite 没有注释存储；`//` 注释可以声明但会被忽略。
 
 ## 示例
 

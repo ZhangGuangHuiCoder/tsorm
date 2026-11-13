@@ -48,6 +48,7 @@ MySQL 8.4 默认使用 `caching_sha2_password`。生产环境应配置 TLS 或�
 - `datetime` 年份必须在 1000 到 9999 之间；整数 `timestamp` 存储不受此 DATETIME 限制。
 - `bigint` 模型字段返回十进制字符串；`int` 字段经过安全整数范围检查后返回 `number`。
 - 非唯一关系列显式建索引。
+- `//` 注释生成为列和表上的内联 `COMMENT` 子句；迁移用 `ALTER TABLE` 应用注释变更。
 
 ## 示例
 

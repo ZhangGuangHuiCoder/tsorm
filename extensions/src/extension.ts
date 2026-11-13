@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { parseSchema, SchemaError } from "../../src/schema/index.js";
-import { completeRelations, definition, formatSchema, hoverText, markdown, suggestions, wordAt, type SuggestionKind } from "./language.js";
+import { schemaErrors, SchemaError } from "../../src/schema/index.js";
+import { completeRelations, definition, formatSchema, hoverText, markdown, models, renameError, resolveSymbol, suggestions, symbolReferences, typeAliases, wordAt, type SuggestionKind } from "./language.js";
 const language = "tsorm";
 const kinds: Record<SuggestionKind, vscode.CompletionItemKind> = {
   keyword: vscode.CompletionItemKind.Keyword,
@@ -11,24 +11,46 @@ const kinds: Record<SuggestionKind, vscode.CompletionItemKind> = {
   value: vscode.CompletionItemKind.Value,
   snippet: vscode.CompletionItemKind.Snippet,
 };
-/** 解析失败时的诊断：定位到出错的单词，没有单词时标出一个字符。 */
-function diagnose(document: vscode.TextDocument, error: unknown): vscode.Diagnostic {
-  const known = error instanceof SchemaError;
-  const line = known ? Math.max(0, Math.min(document.lineCount - 1, error.line - 1)) : 0;
-  const text = document.lineAt(line).text;
-  const column = known ? Math.max(0, Math.min(text.length, error.column - 1)) : 0;
-  const start = new vscode.Position(line, column);
-  const range = document.getWordRangeAtPosition(start) ?? new vscode.Range(start, start.translate(0, column < text.length ? 1 : 0));
-  let message: string;
-  if (known) {
-    message = error.message.replace(/^\d+:\d+\s*/, "");
-  } else {
-    const detail = error instanceof Error ? error.message : String(error);
-    message = "解析器内部错误：" + detail;
-  }
+/** 单个解析错误的诊断：定位到出错的单词，没有单词时标出一个字符。 */
+function makeDiagnostic(range: vscode.Range, message: string): vscode.Diagnostic {
   const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error);
   diagnostic.source = "TSORM";
   return diagnostic;
+}
+function diagnose(document: vscode.TextDocument, error: SchemaError): vscode.Diagnostic {
+  const line = Math.max(0, Math.min(document.lineCount - 1, error.line - 1));
+  const text = document.lineAt(line).text;
+  const column = Math.max(0, Math.min(text.length, error.column - 1));
+  const start = new vscode.Position(line, column);
+  const range = document.getWordRangeAtPosition(start) ?? new vscode.Range(start, start.translate(0, column < text.length ? 1 : 0));
+  return makeDiagnostic(range, error.message.replace(/^\d+:\d+\s*/, ""));
+}
+/** 大纲：模型及其字段、JSON 类型别名，按出现位置排序。 */
+function documentSymbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
+  const text = document.getText();
+  const result: vscode.DocumentSymbol[] = [];
+  for (const alias of typeAliases(text)) {
+    const range = new vscode.Range(document.positionAt(alias.declStart), document.positionAt(alias.end));
+    const name = new vscode.Range(document.positionAt(alias.start), document.positionAt(alias.start + alias.name.length));
+    result.push(new vscode.DocumentSymbol(alias.name, "JSON 类型", vscode.SymbolKind.Struct, range, name));
+  }
+  for (const model of models(text)) {
+    // 范围含结尾花括号；未闭合的模型取到文本末尾。
+    const end = model.end < text.length ? model.end + 1 : model.end;
+    const range = new vscode.Range(document.positionAt(model.start), document.positionAt(end));
+    const name = new vscode.Range(document.positionAt(model.start), document.positionAt(model.start + model.name.length));
+    const children = model.fields.map((f) => {
+      const fieldRange = new vscode.Range(document.positionAt(f.start), document.positionAt(f.end));
+      const fieldName = new vscode.Range(document.positionAt(f.start), document.positionAt(f.start + f.name.length));
+      return new vscode.DocumentSymbol(f.name, f.typeText, vscode.SymbolKind.Field, fieldRange, fieldName);
+    });
+    const symbol = new vscode.DocumentSymbol(model.name, "模型", vscode.SymbolKind.Class, range, name);
+    symbol.children = children;
+    result.push(symbol);
+  }
+  return result.sort((a, b) => {
+    return a.range.start.compareTo(b.range.start);
+  });
 }
 export function activate(context: vscode.ExtensionContext) {
   const selector: vscode.DocumentSelector = { language };
@@ -44,11 +66,19 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
     try {
-      parseSchema(document.getText());
-      diagnostics.delete(document.uri);
+      const errors = schemaErrors(document.getText());
+      if (errors.length) {
+        diagnostics.set(
+          document.uri,
+          errors.map((e) => diagnose(document, e)),
+        );
+      } else {
+        diagnostics.delete(document.uri);
+      }
     } catch (error) {
-      // 非 SchemaError 也要替换旧诊断，否则上一次的错误会一直留着。
-      diagnostics.set(document.uri, [diagnose(document, error)]);
+      // 解析器内部错误也要替换旧诊断，否则上一次的错误会一直留着。
+      const detail = error instanceof Error ? error.message : String(error);
+      diagnostics.set(document.uri, [makeDiagnostic(new vscode.Range(0, 0, 0, 0), "解析器内部错误：" + detail)]);
     }
   };
   context.subscriptions.push(
@@ -83,7 +113,8 @@ export function activate(context: vscode.ExtensionContext) {
       provideDocumentFormattingEdits(document, options) {
         const text = document.getText();
         try {
-          const formatted = formatSchema(completeRelations(text), options.insertSpaces ? " ".repeat(options.tabSize) : "\t", document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n");
+          const complete = vscode.workspace.getConfiguration("tsorm").get<boolean>("format.completeRelations", true);
+          const formatted = formatSchema(complete ? completeRelations(text) : text, options.insertSpaces ? " ".repeat(options.tabSize) : "\t", document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n");
           // 内容没变时不返回编辑，避免把未修改的文件标成已修改。
           if (formatted === text) {
             return [];
@@ -137,6 +168,75 @@ export function activate(context: vscode.ExtensionContext) {
         return target === undefined ? undefined : new vscode.Location(document.uri, document.positionAt(target));
       },
     }),
+    vscode.languages.registerDocumentSymbolProvider(selector, {
+      provideDocumentSymbols(document) {
+        return documentSymbols(document);
+      },
+    }),
+    vscode.languages.registerReferenceProvider(selector, {
+      provideReferences(document, position) {
+        const symbol = resolveSymbol(document.getText(), document.offsetAt(position));
+        if (!symbol) {
+          return [];
+        }
+        // 每个 .orm 文件是独立的 schema（CLI 一次只读一个 --schema），所以只在当前文件内查找。
+        return symbolReferences(document.getText(), symbol).map((token) => {
+          return new vscode.Location(document.uri, new vscode.Range(document.positionAt(token.start), document.positionAt(token.end)));
+        });
+      },
+    }),
+    vscode.languages.registerRenameProvider(selector, {
+      prepareRename(document, position) {
+        const text = document.getText();
+        const offset = document.offsetAt(position);
+        const word = wordAt(text, offset);
+        if (!word || !resolveSymbol(text, offset)) {
+          throw new Error("该位置不能重命名");
+        }
+        return new vscode.Range(document.positionAt(word.start), document.positionAt(word.end));
+      },
+      provideRenameEdits(document, position, newName) {
+        const symbol = resolveSymbol(document.getText(), document.offsetAt(position));
+        if (!symbol) {
+          throw new Error("该位置不能重命名");
+        }
+        const problem = renameError(symbol, newName);
+        if (problem) {
+          throw new Error(problem);
+        }
+        const edit = new vscode.WorkspaceEdit();
+        for (const token of symbolReferences(document.getText(), symbol)) {
+          edit.replace(document.uri, new vscode.Range(document.positionAt(token.start), document.positionAt(token.end)), newName);
+        }
+        return edit;
+      },
+    }),
+    vscode.languages.registerCodeActionsProvider(
+      selector,
+      {
+        provideCodeActions(document, _range, context) {
+          const ours = context.diagnostics.filter((d) => {
+            return d.source === "TSORM";
+          });
+          if (!ours.length) {
+            return [];
+          }
+          const text = document.getText();
+          const completed = completeRelations(text);
+          // completeRelations 内部已用解析器校验，有改动就必然合法。
+          if (completed === text) {
+            return [];
+          }
+          const action = new vscode.CodeAction("补全关系声明", vscode.CodeActionKind.QuickFix);
+          action.diagnostics = ours;
+          action.edit = new vscode.WorkspaceEdit();
+          action.edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(text.length)), completed);
+          action.isPreferred = true;
+          return [action];
+        },
+      },
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
   );
   vscode.workspace.textDocuments.forEach(validate);
 }

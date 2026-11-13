@@ -2,18 +2,19 @@ import { encodeJson, decodeJson } from "./json.js";
 import { localDateTime, validateDateTime } from "./datetime.js";
 import type { Table, Column } from "../schema/index.js";
 import { OrmError, fail } from "./errors.js";
+/** Accepts only a safe integer as a number, bigint or plain decimal string; anything else throws NUMERIC_OVERFLOW. Negative zero normalizes to 0. */
 export function safeInteger(v: any): number {
-  if ((typeof v === "string" && /^-?\d+$/.test(v)) || typeof v === "bigint") {
+  if (typeof v === "bigint" || (typeof v === "string" && /^-?\d+$/.test(v))) {
     const n = BigInt(v);
     if (n > BigInt(Number.MAX_SAFE_INTEGER) || n < BigInt(Number.MIN_SAFE_INTEGER)) {
       throw new OrmError("NUMERIC_OVERFLOW", "Integer exceeds JavaScript safe range");
     }
+    return Number(n);
   }
-  const n = Number(v);
-  if (!Number.isSafeInteger(n)) {
-    throw new OrmError("NUMERIC_OVERFLOW", "Integer exceeds JavaScript safe range");
+  if (typeof v !== "number" || !Number.isSafeInteger(v)) {
+    throw new OrmError("NUMERIC_OVERFLOW", "Expected a safe integer");
   }
-  return n;
+  return v === 0 ? 0 : v;
 }
 export function encode(c: Column, value: any): any {
   if (c.type === "json") {
@@ -179,12 +180,17 @@ export function decodeDecimal(c: Column, value: unknown): string {
   throw new OrmError("INVALID_DATABASE_VALUE", "Invalid decimal value from the database");
 }
 
+const NUMBER = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
+/** Accepts only a finite number or a plain numeric string (signed, fractional or exponent); anything else throws INVALID_DATABASE_VALUE. Negative zero normalizes to 0. */
 export function finiteNumber(value: unknown): number {
+  if (typeof value !== "number" && !(typeof value === "string" && NUMBER.test(value.trim()))) {
+    throw new OrmError("INVALID_DATABASE_VALUE", "Invalid number value from the database");
+  }
   const result = Number(value);
   if (!Number.isFinite(result)) {
-    throw new OrmError("NUMERIC_OVERFLOW", "Number exceeds finite JavaScript range");
+    throw new OrmError("INVALID_DATABASE_VALUE", "Invalid number value from the database");
   }
-  return result;
+  return result === 0 ? 0 : result;
 }
 /** Normalizes any driver binary (Buffer, Uint8Array, ArrayBuffer) to a plain Uint8Array view. */
 export function toBytes(value: unknown): Uint8Array {

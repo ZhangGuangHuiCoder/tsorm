@@ -5,7 +5,7 @@ import type { Connection, Datasource, MigrationProvider, Scratch, Section } from
 import { columnChanges, structuralIndexKey } from "../../migrations/provider.js";
 import { historyTable, type DbModel, type DbTable } from "../../migrations/introspect.js";
 import type { TableChange } from "../../migrations/diff.js";
-import { postgresSchemaSQL } from "./index.js";
+import { literal, postgresSchemaSQL } from "./index.js";
 import { isPostgresUrl } from "../urls.js";
 import { quoteIdentifier } from "../../query/identifiers.js";
 
@@ -240,11 +240,14 @@ const pgActions: Record<string, string> = {
 async function introspect(conn: Connection): Promise<DbModel> {
   const ds = asPostgres(conn.datasource);
   const tables: Record<string, DbTable> = {};
-  const relations = (await conn.query("SELECT c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r','p') AND c.relname <> $2 ORDER BY c.relname", [ds.schema, historyTable(conn)])).filter(
-    (r) => {
-      return !ds.ignore?.(r.name);
-    },
-  );
+  const relations = (
+    await conn.query("SELECT c.relname AS name, obj_description(c.oid, 'pg_class') AS comment FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r','p') AND c.relname <> $2 ORDER BY c.relname", [
+      ds.schema,
+      historyTable(conn),
+    ])
+  ).filter((r) => {
+    return !ds.ignore?.(r.name);
+  });
   for (const r of relations) {
     tables[r.name] = {
       name: r.name,
@@ -254,11 +257,13 @@ async function introspect(conn: Connection): Promise<DbModel> {
       checks: [],
       foreignKeys: [],
       definition: "",
+      comment: r.comment ?? undefined,
     };
   }
   const columns = await conn.query(
     `SELECT c.relname AS "table", a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type,
-       a.attnotnull AS notnull, pg_get_expr(d.adbin, d.adrelid) AS "default", a.attidentity AS identity
+       a.attnotnull AS notnull, pg_get_expr(d.adbin, d.adrelid) AS "default", a.attidentity AS identity,
+       col_description(c.oid, a.attnum) AS comment
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      JOIN pg_attribute a ON a.attrelid = c.oid
      LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
@@ -284,6 +289,7 @@ async function introspect(conn: Connection): Promise<DbModel> {
       default: c.default,
       auto: !!identity,
       definition: `${quote(c.name)} ${c.type}${identity}${c.notnull ? " NOT NULL" : ""}` + (c.default !== null ? " DEFAULT " + c.default : ""),
+      comment: c.comment ?? undefined,
     });
   }
   const constraints = await conn.query(
@@ -403,6 +409,9 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
     }
     for (const col of c.addedColumns) {
       statements.push(`ALTER TABLE ${t} ADD COLUMN ${col.definition};`);
+      if (col.comment) {
+        statements.push(`COMMENT ON COLUMN ${t}.${quote(col.name)} IS ${literal(col.comment)};`);
+      }
     }
     for (const { from, to, changes } of c.alteredColumns) {
       const column = `ALTER TABLE ${t} ALTER COLUMN ${quote(to.name)}`;
@@ -425,6 +434,9 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
         const identity = /GENERATED (ALWAYS|BY DEFAULT) AS IDENTITY/.exec(to.definition)![1];
         statements.push(`${column} ADD GENERATED ${identity} AS IDENTITY;`);
       }
+      if (changes.includes("comment")) {
+        statements.push(`COMMENT ON COLUMN ${t}.${quote(to.name)} IS ${to.comment ? literal(to.comment) : "NULL"};`);
+      }
     }
     if (c.primaryKey && c.to.primaryKey) {
       statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${quote(c.to.primaryKey.name)} ${c.to.primaryKey.definition};`);
@@ -434,6 +446,9 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
     }
     for (const k of c.addedChecks) {
       statements.push(`ALTER TABLE ${t} ADD CONSTRAINT ${quote(k.name)} ${k.expression};`);
+    }
+    if (c.comment) {
+      statements.push(`COMMENT ON TABLE ${t} IS ${c.to.comment ? literal(c.to.comment) : "NULL"};`);
     }
     push("AlterTable", statements);
   }
@@ -456,7 +471,16 @@ function renderDiff(created: DbTable[], dropped: DbTable[], changed: TableChange
       }),
     );
     const body = parts.join(",\n") + (constraints.length ? ",\n\n" + constraints.join(",\n") : "");
-    push("CreateTable", [`CREATE TABLE ${quote(t.name)} (\n${body}\n);`]);
+    const statements = [`CREATE TABLE ${quote(t.name)} (\n${body}\n);`];
+    if (t.comment) {
+      statements.push(`COMMENT ON TABLE ${quote(t.name)} IS ${literal(t.comment)};`);
+    }
+    for (const col of t.columns) {
+      if (col.comment) {
+        statements.push(`COMMENT ON COLUMN ${quote(t.name)}.${quote(col.name)} IS ${literal(col.comment)};`);
+      }
+    }
+    push("CreateTable", statements);
   }
   push("CreateIndex", [
     ...created.flatMap((t) => {

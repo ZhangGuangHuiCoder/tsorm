@@ -1,4 +1,6 @@
 import { parseSchema } from "../../src/schema/index.js";
+/** 内置标量类型名，补全与重命名校验共用。 */
+const scalarTypes = ["int", "bigint", "number", "decimal", "string", "text", "boolean", "datetime", "timestamp", "json", "bytes", "morph"];
 export interface Token {
   text: string;
   start: number;
@@ -38,6 +40,11 @@ export function formatSchema(source: string, indent = "  ", eol = "\n"): string 
   let depth = 0;
   let parens = 0;
   let brackets = 0;
+  /** 正在输出的顶层 `prefix` / `ignore` 语句，语句结束时单独成行。 */
+  let statement: string | undefined;
+  /** 顶层 `prefix` / `ignore` 语句（含紧贴其上的注释）在 lines 里的范围，格式化结束时提到文件开头。 */
+  const hoisted: [number, number][] = [];
+  let begin = 0;
   /** 下一行之前是否要空一行：顶层声明之间固定一行，声明内部保留用户写的空行。 */
   let blank = false;
   /** 刚输出了文件开头或 `{` 行，紧随其后的空行没有意义。 */
@@ -61,7 +68,7 @@ export function formatSchema(source: string, indent = "  ", eol = "\n"): string 
     const text = list[i].text;
     const previous = list[i - 1]?.text;
     const gap = i ? source.slice(list[i - 1].end, list[i].start) : "";
-    const tight = ["?", ":", ",", ")", "]", "(", "[", ".", "<", ">"].includes(text) || ["(", "[", ".", "@", "<"].includes(previous ?? "");
+    const tight = ((text !== "[" || statement !== "ignore" || previous !== "ignore") && ["?", ":", ",", ")", "]", "(", "[", ".", "<", ">"].includes(text)) || ["(", "[", ".", "@", "<"].includes(previous ?? "");
     if (isComment(text)) {
       // 与上一个 token 同行的注释留在原行尾，包括 `{`、`}` 之后的注释。
       if (i && !gap.includes("\n")) {
@@ -84,6 +91,18 @@ export function formatSchema(source: string, indent = "  ", eol = "\n"): string 
       line = text;
       flush();
       continue;
+    }
+    if (depth === 0 && parens === 0 && brackets === 0 && ["prefix", "ignore"].includes(text) && (list[i + 1]?.text.startsWith('"') || list[i + 1]?.text === "[")) {
+      flush();
+      statement = text;
+      begin = lines.length;
+      while (begin > 0 && /^\/[/*]/.test(lines[begin - 1])) {
+        begin--;
+      }
+      // 注释之前隔开上一个声明的空行也归这个语句。
+      if (begin > 0 && lines[begin - 1] === "") {
+        begin--;
+      }
     }
     const field = depth === 1 && parens === 0 && brackets === 0 && startsField(list, i);
     if (field) {
@@ -142,8 +161,38 @@ export function formatSchema(source: string, indent = "  ", eol = "\n"): string 
     if (text === "," || text === ":") {
       line += " ";
     }
+    if (statement && brackets === 0 && (statement === "prefix" ? previous === "prefix" : text === "]")) {
+      flush();
+      blank = true;
+      statement = undefined;
+      hoisted.push([begin, lines.length]);
+    }
   }
   flush();
+  if (hoisted.length) {
+    const blocks = hoisted.map(([from, to]) => {
+      return lines.slice(from, to).filter((l, k) => {
+        return l || k;
+      });
+    });
+    const rest = lines.filter((_, k) => {
+      return !hoisted.some(([from, to]) => {
+        return k >= from && k < to;
+      });
+    });
+    while (rest[0] === "") {
+      rest.shift();
+    }
+    lines.length = 0;
+    lines.push(
+      ...blocks.flatMap((b, k) => {
+        return k ? ["", ...b] : b;
+      }),
+    );
+    if (rest.length) {
+      lines.push("", ...rest);
+    }
+  }
   return lines.join(eol).trimEnd() + eol;
 }
 /** 字段上某个属性的参数原文（不含括号），属性不存在或没有参数列表时为 undefined。 */
@@ -583,15 +632,21 @@ export interface ModelInfo {
   end: number;
   /** 新字段的插入位置：模型级属性之前，没有模型级属性时是结尾花括号之前。 */
   insertAt: number;
+  /** 模型级属性（@@index 等）的名字与参数位置。 */
+  attrs: AttrSpan[];
   fields: {
     name: string;
     /** 类型名；字符串字面量联合（枚举）记作 string。 */
     type: string;
     /** 类型片段原文，含长度精度与数组标记。 */
     typeText: string;
+    /** 类型片段的起始位置。 */
+    typeStart: number;
     /** 类型片段结束位置，补属性时在此插入。 */
     typeEnd: number;
     start: number;
+    /** 字段结束位置，含默认值与属性。 */
+    end: number;
     many: boolean;
     nullable: boolean;
     hasDefault: boolean;
@@ -626,6 +681,7 @@ export function models(source: string): ModelInfo[] {
       start: list[i + 1].start,
       end: source.length,
       insertAt: source.length,
+      attrs: [],
       fields: [],
     };
     let nesting = 0;
@@ -648,8 +704,16 @@ export function models(source: string): ModelInfo[] {
       if ([")", "]"].includes(t.text)) {
         nesting--;
       }
-      if (nesting === 0 && blockAt === undefined && t.text === "@" && list[j + 1]?.text === "@") {
-        blockAt = t.start;
+      if (nesting === 0 && t.text === "@" && list[j + 1]?.text === "@") {
+        if (blockAt === undefined) {
+          blockAt = t.start;
+        }
+        if (isIdent(list[j + 2]?.text)) {
+          const close = list[j + 3]?.text === "(" ? closing(list, j + 3, "(", ")") : undefined;
+          model.attrs.push(attrSpan(source, list, j + 2, close === undefined ? undefined : list[close]));
+          j = close ?? j + 2;
+        }
+        continue;
       }
       if (nesting !== 0 || !startsField(list, j)) {
         continue;
@@ -665,6 +729,7 @@ export function models(source: string): ModelInfo[] {
         name: t.text,
         type: type.text.startsWith('"') ? "string" : type.text,
         typeText: source.slice(type.start, list[span.last].end),
+        typeStart: type.start,
         typeEnd: list[span.last].end,
         start: t.start,
         many: span.many,
@@ -675,6 +740,60 @@ export function models(source: string): ModelInfo[] {
     result.push(model);
     // 模型体内的 token 不会再开始另一个模型。
     i = j;
+  }
+  return result;
+}
+export interface AliasInfo {
+  name: string;
+  /** 类型名的位置，跳转定义与符号定位到这里。 */
+  start: number;
+  /** 声明的起始位置（type 关键字）。 */
+  declStart: number;
+  /** 类型体结束位置。 */
+  end: number;
+}
+/** 顶层 `type X = ...` JSON 类型别名。 */
+export function typeAliases(source: string): AliasInfo[] {
+  const list = tokens(source).filter((t) => {
+    return !isComment(t.text);
+  });
+  const inside = jsonSpans(list);
+  const result: AliasInfo[] = [];
+  let depth = 0;
+  for (let i = 0; i < list.length; i++) {
+    const text = list[i].text;
+    if (inside.has(i)) {
+      continue;
+    }
+    if (["{", "(", "[", "<"].includes(text)) {
+      depth++;
+    } else if (["}", ")", "]", ">"].includes(text)) {
+      depth = Math.max(0, depth - 1);
+    }
+    if (depth !== 0 || text !== "type" || !isIdent(list[i + 1]?.text) || list[i + 2]?.text !== "=") {
+      continue;
+    }
+    // 类型体延伸到深度 0 的第一个外部 token；`|` 与 `[` 是联合和数组后缀。
+    let k = i + 3;
+    let shape = 0;
+    while (k < list.length) {
+      const t = list[k].text;
+      if (["{", "(", "[", "<"].includes(t)) {
+        shape++;
+      } else if (["}", ")", "]", ">"].includes(t)) {
+        shape--;
+      } else if (shape === 0 && k > i + 3 && t !== "|") {
+        break;
+      }
+      k++;
+    }
+    result.push({
+      name: list[i + 1].text,
+      start: list[i + 1].start,
+      declStart: list[i].start,
+      end: list[k - 1].end,
+    });
+    i = k - 1;
   }
   return result;
 }
@@ -765,6 +884,7 @@ function attrSpan(source: string, list: Token[], at: number, close?: Token): Att
 function fieldMeta(source: string, list: Token[], from: number, inside: Set<number>) {
   let depth = 0;
   let hasDefault = false;
+  let end = list[from - 1]?.end ?? 0;
   const attrs: string[] = [];
   const attrSpans: AttrSpan[] = [];
   for (let k = from; k < list.length; k++) {
@@ -790,22 +910,26 @@ function fieldMeta(source: string, list: Token[], from: number, inside: Set<numb
         const span = attrSpan(source, list, k + 1, close === undefined ? undefined : list[close]);
         attrs.push(span.name);
         attrSpans.push(span);
+        end = list[close ?? k + 1].end;
         k = close ?? k + 1;
         continue;
       }
       if (text === "=") {
         hasDefault = true;
+        end = list[k].end;
         continue;
       }
       if (startsField(list, k)) {
         break;
       }
     }
+    end = list[k].end;
   }
-  return { hasDefault, attrs, attrSpans };
+  return { hasDefault, attrs, attrSpans, end };
 }
 export const help: Record<string, string> = {
   model: "定义数据库模型。",
+  type: "声明 JSON 类型别名，在 json<...> 里按名字引用。",
   json: "类型化 JSON 字段。",
   softDelete: "启用内置软删除；省略参数时默认使用可空的 deletedAt，字段未声明会自动创建。",
   int: "安全整数，返回 number。",
@@ -824,6 +948,8 @@ export const help: Record<string, string> = {
   unique: "唯一约束。",
   updatedAt: "创建和每次更新时自动写入当前时间。",
   map: "数据库中的列名。",
+  ignore: "迁移不管理的表：物理表名模式列表，`*` 匹配任意字符，忽略大小写。",
+  prefix: "全局表名前缀，加在每张表的物理名之前，同时决定迁移历史表名。",
   via: "反向关系：指定目标模型的关系字段，且必须是该字段唯一的属性。",
   relation: "绑定外键字段或配置外键动作，只用于单一关系字段。",
   index: "模型级索引。",
@@ -840,6 +966,7 @@ export const help: Record<string, string> = {
 /** 每条提示的示例片段，与 help 同名键一一对应。 */
 export const examples: Record<string, string> = {
   model: "model User {\n  id: int @id @auto\n  email: string @unique\n}",
+  type: 'type Preferences = {\n  theme: "light" | "dark"\n}',
   json: 'type Preferences = {\n  theme: "light" | "dark"\n}\n\nmodel Account {\n  id: int @id @auto\n  preferences?: json<Preferences>\n}',
   softDelete: "id: int @id @auto\n\n  @@softDelete()",
   int: "id: int @id @auto",
@@ -861,6 +988,8 @@ export const examples: Record<string, string> = {
   via: "posts: Post[] @via(author)",
   relation: "ownerId: int\n  owner: User @relation(field: ownerId, onDelete: Cascade)",
   index: "email: string\n\n  @@index(email)",
+  ignore: 'ignore ["legacy_*", "misc"]',
+  prefix: 'prefix "app_"',
   now: "createdAt: datetime = now()",
   uuid: "id: string(36) = uuid() @id",
   true: "enabled: boolean = true",
@@ -1028,6 +1157,17 @@ function context(source: string, offset: number) {
     .at(-1);
   return { all, current, field };
 }
+/** 去掉注释后的源码，用来判断顶层语句是否已经声明。 */
+function declared(source: string): string {
+  return tokens(source)
+    .filter((t) => {
+      return !isComment(t.text);
+    })
+    .map((t) => {
+      return t.text;
+    })
+    .join(" ");
+}
 function listed(source: string, offset: number): Suggestion[] {
   const before = source.slice(0, offset);
   const previous = tokens(before);
@@ -1062,6 +1202,42 @@ function listed(source: string, offset: number): Suggestion[] {
         };
       });
   }
+  const morphArgs = /morph\(([^()]*)$/.exec(tail)?.[1];
+  if (morphArgs !== undefined) {
+    const parts = morphArgs.split(",");
+    const position = parts.length - 1;
+    if (position > 1) {
+      return [];
+    }
+    const written = new Set(
+      parts.map((k) => {
+        return k.trim();
+      }),
+    );
+    const name = field?.name ?? "owner";
+    // 绑定列须是已声明的非空标量列且不能是键；第一列是判别列（string），第二列匹配拥有方主键类型。
+    return (current?.fields ?? [])
+      .filter((f) => {
+        return (
+          !written.has(f.name) &&
+          !f.many &&
+          !f.nullable &&
+          ["int", "bigint", "number", "decimal", "string", "boolean", "datetime", "timestamp"].includes(f.type) &&
+          !f.attrs.some((a) => {
+            return ["id", "auto", "unique"].includes(a);
+          }) &&
+          (position === 0 ? f.type === "string" : true)
+        );
+      })
+      .map((f) => {
+        return {
+          label: f.name,
+          kind: "field" as const,
+          description: position === 0 ? "判别列（非空 string）" : "主键列（匹配拥有方主键类型）",
+          example: position === 0 ? `${name}: morph(${f.name}, ${name}Id)` : `${name}: morph(${parts[0].trim()}, ${f.name})`,
+        };
+      });
+  }
   if (/@@softDelete\(\s*[\w$]*$/.test(tail)) {
     return (current?.fields ?? [])
       .filter((f) => {
@@ -1091,18 +1267,37 @@ function listed(source: string, offset: number): Suggestion[] {
       }),
     );
     // 只有列和单个持有方关系能作为索引键；@@id 的键还必须非空且不是 json。
-    return (current?.fields ?? [])
+    const fields = (current?.fields ?? [])
       .filter((f) => {
         return !written.has(f.name) && !f.many && !["json", "bytes", "text", "morph"].includes(f.type) && !f.attrs.includes("via") && (attr !== "id" || (!f.nullable && f.type !== "json"));
       })
       .map((f) => {
         return {
           label: f.name,
-          kind: "field",
+          kind: "field" as const,
           description: f.typeText || "字段",
           example: `@@${attr}(${[...written].filter(Boolean).concat(f.name).join(", ")})`,
         };
       });
+    // 隐式 morph 自动生成 nameType/nameId 两列，同样可以作为键；显式 morph 的绑定列已是普通字段。
+    const implicit = (current?.fields ?? []).flatMap((f) => {
+      return f.type === "morph" && !f.typeText.includes("(") ? [`${f.name}Type`, `${f.name}Id`] : [];
+    });
+    return [
+      ...fields,
+      ...implicit
+        .filter((name) => {
+          return !written.has(name);
+        })
+        .map((name) => {
+          return {
+            label: name,
+            kind: "field" as const,
+            description: "morph 生成列",
+            example: `@@${attr}(${[...written].filter(Boolean).concat(name).join(", ")})`,
+          };
+        }),
+    ];
   }
   if (/@@\w*$/.test(tail)) {
     return ["id", "unique", "index", "map", "softDelete"].map((label) => {
@@ -1150,7 +1345,7 @@ function listed(source: string, offset: number): Suggestion[] {
   if (/:\s*\w*$/.test(tail)) {
     return current
       ? [
-          ...["int", "bigint", "number", "decimal", "string", "text", "boolean", "datetime", "timestamp", "json", "bytes", "morph"].map((label) => {
+          ...scalarTypes.map((label) => {
             return {
               label,
               kind: "type" as const,
@@ -1185,6 +1380,29 @@ function listed(source: string, offset: number): Suggestion[] {
           kind: "keyword",
           insert: "model ${1:Name} {\n  id: int @id @auto\n  $0\n}",
           description: help.model,
+        },
+        {
+          label: "type",
+          kind: "keyword",
+          insert: "type ${1:Name} = {\n  ${2:field}: ${3:string}\n}",
+          description: help.type,
+        },
+        // prefix 一个文件只能声明一次；ignore 可以多次声明，模式会合并。
+        ...(/(?:^|[\s;])prefix\s*"/m.test(declared(source))
+          ? []
+          : [
+              {
+                label: "prefix",
+                kind: "keyword" as const,
+                insert: 'prefix "${1:app_}"',
+                description: help.prefix,
+              },
+            ]),
+        {
+          label: "ignore",
+          kind: "keyword",
+          insert: 'ignore ["${1:legacy_*}"]',
+          description: help.ignore,
         },
       ];
 }
@@ -1272,14 +1490,15 @@ export function wordAt(source: string, offset: number): Token | undefined {
     return t.start <= offset && offset <= t.end && isIdent(t.text);
   });
 }
-/** 悬停说明：模型显示字段列表，关键字显示说明与示例。 */
+/** 悬停说明：模型显示字段列表，别名显示声明原文，字段显示整行原文，关键字显示说明与示例。 */
 export function hoverText(source: string, offset: number): string | undefined {
-  const word = wordAt(source, offset)?.text;
+  const word = wordAt(source, offset);
   if (!word) {
     return;
   }
-  const model = models(source).find((m) => {
-    return m.name === word;
+  const all = models(source);
+  const model = all.find((m) => {
+    return m.name === word.text;
   });
   if (model) {
     return (
@@ -1294,19 +1513,59 @@ export function hoverText(source: string, offset: number): string | undefined {
       "\n```"
     );
   }
-  const text = own(help, word);
+  const alias = typeAliases(source).find((a) => {
+    return a.name === word.text;
+  });
+  if (alias) {
+    return "JSON 类型 **" + alias.name + "**\n\n```tsorm\n" + source.slice(alias.declStart, alias.end) + "\n```";
+  }
+  // 字段声明处显示整段原文；引用处仍走关键字说明。
+  const current = all.find((m) => {
+    return m.start < word.start && word.start <= m.end;
+  });
+  const field = current?.fields.find((f) => {
+    return f.name === word.text && f.start === word.start;
+  });
+  if (field) {
+    return "字段 **" + field.name + "**\n\n```tsorm\n" + source.slice(field.start, field.end) + "\n```";
+  }
+  const text = own(help, word.text);
   if (!text) {
     return;
   }
-  const example = own(examples, word);
-  return example ? markdown(word + ": " + text, example) : word + ": " + text;
+  const example = own(examples, word.text);
+  return example ? markdown(word.text + ": " + text, example) : word.text + ": " + text;
 }
 /** 说明文字加示例代码块的 Markdown。 */
 export const markdown = (title: string, example: string) => {
   return title + "\n\n**示例**\n\n```tsorm\n" + example + "\n```";
 };
+/** 包住单词的属性调用与所属字段：向前跳过配对的括号，直到未闭合的 `(`。 */
+function enclosingAttr(source: string, current: ModelInfo, word: Token): { name: string; field: Field | undefined } | undefined {
+  const list = tokens(source.slice(current.start, word.start));
+  let depth = 0;
+  let k = list.length - 1;
+  for (; k >= 0; k--) {
+    if (list[k].text === ")") {
+      depth++;
+    } else if (list[k].text === "(" && !depth--) {
+      break;
+    }
+  }
+  if (k < 1 || list[k - 2]?.text !== "@") {
+    return;
+  }
+  return {
+    name: list[k - 1].text,
+    field: current.fields
+      .filter((f) => {
+        return f.start < word.start;
+      })
+      .at(-1),
+  };
+}
 /**
- * 跳转定义的目标位置：模型名跳到模型声明；
+ * 跳转定义的目标位置：模型名跳到模型声明，别名跳到 type 声明；
  * `@via(x)` 跳到目标模型的持有方字段；`@relation(field: x)` 与模型级属性里的字段名跳到本模型的字段。
  */
 export function definition(source: string, offset: number): number | undefined {
@@ -1321,48 +1580,228 @@ export function definition(source: string, offset: number): number | undefined {
   if (model) {
     return model.start;
   }
+  const alias = typeAliases(source).find((a) => {
+    return a.name === word.text;
+  });
+  if (alias) {
+    return alias.start;
+  }
   const current = all.find((m) => {
     return m.start < word.start && word.start <= m.end;
   });
   if (!current) {
     return;
   }
-  // 找到包住这个单词的属性调用：向前跳过配对的括号，直到未闭合的 `(`。
-  const list = tokens(source.slice(current.start, word.start));
-  let depth = 0;
-  let k = list.length - 1;
-  for (; k >= 0; k--) {
-    if (list[k].text === ")") {
-      depth++;
-    } else if (list[k].text === "(" && !depth--) {
-      break;
-    }
-  }
-  const attr = list[k - 1]?.text;
-  if (k < 1 || list[k - 2]?.text !== "@") {
+  const attr = enclosingAttr(source, current, word);
+  if (!attr) {
     return;
   }
-  if (attr === "via") {
-    const field = current.fields
-      .filter((f) => {
-        return f.start < word.start;
-      })
-      .at(-1);
+  if (attr.name === "via") {
     const target = all.find((m) => {
-      return m.name === field?.type;
+      return m.name === attr.field?.type;
     });
     return target?.fields.find((f) => {
       return f.name === word.text;
     })?.start;
   }
-  if (!["relation", "id", "unique", "index", "softDelete"].includes(attr)) {
+  if (!["relation", "id", "unique", "index", "softDelete"].includes(attr.name)) {
     return;
   }
   // @relation 只有 field 的值是字段名，onDelete 等选项的值不是。
-  if (attr === "relation" && !/(?:^|[(,])\s*field\s*:\s*$/.test(source.slice(current.start, word.start))) {
+  if (attr.name === "relation" && !/(?:^|[(,])\s*field\s*:\s*$/.test(source.slice(current.start, word.start))) {
     return;
   }
   return current.fields.find((f) => {
     return f.name === word.text;
   })?.start;
+}
+/** 引用与重命名的目标：模型、JSON 类型别名，或某个模型下的字段。 */
+export type SymbolTarget = { kind: "model"; name: string } | { kind: "alias"; name: string } | { kind: "field"; model: string; name: string };
+/** 光标处的符号；关键字、选项名等不可引用的单词返回 undefined。 */
+export function resolveSymbol(source: string, offset: number): SymbolTarget | undefined {
+  const word = wordAt(source, offset);
+  if (!word) {
+    return;
+  }
+  const all = models(source);
+  if (
+    all.some((m) => {
+      return m.name === word.text;
+    })
+  ) {
+    return { kind: "model", name: word.text };
+  }
+  if (
+    typeAliases(source).some((a) => {
+      return a.name === word.text;
+    })
+  ) {
+    return { kind: "alias", name: word.text };
+  }
+  const current = all.find((m) => {
+    return m.start < word.start && word.start <= m.end;
+  });
+  if (!current) {
+    return;
+  }
+  // 字段声明本身。
+  if (
+    current.fields.some((f) => {
+      return f.name === word.text && f.start === word.start;
+    })
+  ) {
+    return { kind: "field", model: current.name, name: word.text };
+  }
+  // morph 绑定的列名在类型片段里，不在属性调用里。
+  if (
+    current.fields.some((f) => {
+      return f.type === "morph" && f.typeStart <= word.start && word.start <= f.typeEnd;
+    })
+  ) {
+    return { kind: "field", model: current.name, name: word.text };
+  }
+  const attr = enclosingAttr(source, current, word);
+  if (!attr) {
+    return;
+  }
+  if (attr.name === "via") {
+    const target = all.find((m) => {
+      return m.name === attr.field?.type;
+    });
+    return target ? { kind: "field", model: target.name, name: word.text } : undefined;
+  }
+  if (!["relation", "id", "unique", "index", "softDelete"].includes(attr.name)) {
+    return;
+  }
+  if (attr.name === "relation" && !/(?:^|[(,])\s*field\s*:\s*$/.test(source.slice(current.start, word.start))) {
+    return;
+  }
+  return { kind: "field", model: current.name, name: word.text };
+}
+/** 属性参数列表里的标识符 token，带绝对位置。 */
+function argsTokens(source: string, span: AttrSpan): Token[] {
+  if (span.open === undefined || span.close === undefined) {
+    return [];
+  }
+  const base = span.open + 1;
+  return tokens(source.slice(base, span.close - 1)).map((t) => {
+    return { text: t.text, start: t.start + base, end: t.end + base };
+  });
+}
+/** 符号在文件里的全部出现位置，含声明本身。 */
+export function symbolReferences(source: string, symbol: SymbolTarget): Token[] {
+  const all = models(source);
+  const result: Token[] = [];
+  const match = (t: Token) => {
+    return isIdent(t.text) && t.text === symbol.name;
+  };
+  if (symbol.kind === "model") {
+    const model = all.find((m) => {
+      return m.name === symbol.name;
+    });
+    if (model) {
+      result.push({ text: model.name, start: model.start, end: model.start + model.name.length });
+    }
+    for (const m of all) {
+      for (const f of m.fields) {
+        if (f.type === symbol.name) {
+          result.push({ text: f.type, start: f.typeStart, end: f.typeStart + f.type.length });
+        }
+      }
+    }
+    return result;
+  }
+  if (symbol.kind === "alias") {
+    const alias = typeAliases(source).find((a) => {
+      return a.name === symbol.name;
+    });
+    if (alias) {
+      result.push({ text: alias.name, start: alias.start, end: alias.start + alias.name.length });
+    }
+    const list = tokens(source).filter((t) => {
+      return !isComment(t.text);
+    });
+    for (const i of jsonSpans(list)) {
+      if (match(list[i])) {
+        result.push(list[i]);
+      }
+    }
+    return result;
+  }
+  const owner = all.find((m) => {
+    return m.name === symbol.model;
+  });
+  const field = owner?.fields.find((f) => {
+    return f.name === symbol.name;
+  });
+  if (field) {
+    result.push({ text: field.name, start: field.start, end: field.start + field.name.length });
+  }
+  for (const m of all) {
+    for (const f of m.fields) {
+      // @via(x) 指向目标模型的字段。
+      const via = f.attrSpans.find((a) => {
+        return a.name === "via";
+      });
+      if (via && f.type === symbol.model) {
+        result.push(...argsTokens(source, via).filter(match));
+      }
+      if (m.name !== symbol.model) {
+        continue;
+      }
+      // @relation(field: x) 绑定本模型的列。
+      const relation = f.attrSpans.find((a) => {
+        return a.name === "relation";
+      });
+      if (relation) {
+        const args = argsTokens(source, relation);
+        for (let i = 0; i + 2 < args.length; i++) {
+          if (args[i].text === "field" && args[i + 1].text === ":" && match(args[i + 2])) {
+            result.push(args[i + 2]);
+          }
+        }
+      }
+      // morph 绑定的列名。
+      if (f.type === "morph") {
+        const base = f.typeStart;
+        for (const t of tokens(source.slice(base, f.typeEnd))) {
+          if (match(t)) {
+            result.push({ text: t.text, start: t.start + base, end: t.end + base });
+          }
+        }
+      }
+    }
+    // @@index / @@unique / @@id / @@softDelete 的键。
+    if (m.name === symbol.model) {
+      for (const a of m.attrs) {
+        if (["index", "unique", "id", "softDelete"].includes(a.name)) {
+          result.push(...argsTokens(source, a).filter(match));
+        }
+      }
+    }
+  }
+  return result;
+}
+/** 光标处符号的全部引用；不在符号上时返回空数组。 */
+export function references(source: string, offset: number): Token[] {
+  const symbol = resolveSymbol(source, offset);
+  return symbol ? symbolReferences(source, symbol) : [];
+}
+const reservedNames = new Set(["__proto__", "constructor", "prototype", "AND", "OR", "NOT", "_count"]);
+const typeNames = new Set(scalarTypes);
+/** 重命名的新名字是否合法，规则与解析器对模型名/字段名的要求一致。 */
+export function renameError(symbol: SymbolTarget, name: string): string | undefined {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) {
+    return "名字必须是标识符";
+  }
+  if (reservedNames.has(name)) {
+    return "名字是保留字";
+  }
+  if (symbol.kind === "model" && (typeNames.has(name) || name.startsWith("$"))) {
+    return "模型名不能是类型关键字或以 $ 开头";
+  }
+  if (symbol.kind === "field" && (name.startsWith("$") || name.startsWith("__orm_"))) {
+    return "字段名不能以 $ 或 __orm_ 开头";
+  }
+  return undefined;
 }

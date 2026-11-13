@@ -21,6 +21,19 @@ test("ORM connection URL parsing decodes credentials and converts query paramete
     return connectionURL({}, ["postgresql:"]);
   }).toThrow();
 });
+test("connection query parameters keep unsafe integers as strings to avoid precision loss", () => {
+  expect(mysqlConnection("mysql://u:p@localhost/app?connectionLimit=5&big=9007199254740993")).toMatchObject({
+    connectionLimit: 5,
+    big: "9007199254740993",
+  });
+});
+test("connection URL rejects invalid percent-encoding with a VALIDATION error", () => {
+  for (const url of ["mysql://us%er:p@localhost/app", "mysql://u:p%w@localhost/app", "mysql://u:p@localhost/d%b"]) {
+    expect(() => {
+      return mysqlConnection(url);
+    }).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+  }
+});
 test("server adapters reject connection objects before connecting", async () => {
   for (const factory of [mysql, postgres]) {
     await expect(

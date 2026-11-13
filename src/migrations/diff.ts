@@ -32,6 +32,8 @@ export interface TableChange {
   droppedColumns: DbColumn[];
   alteredColumns: ColumnChange[];
   primaryKey: boolean;
+  /** True when the table comment changed. */
+  comment: boolean;
   addedUniques: DbConstraint[];
   droppedUniques: DbConstraint[];
   addedIndexes: DbIndex[];
@@ -96,6 +98,7 @@ function tableChange(provider: MigrationProvider, from: DbTable, to: DbTable): T
     droppedColumns: columns.dropped,
     alteredColumns,
     primaryKey: (from.primaryKey?.columns.join("\0") ?? "") !== (to.primaryKey?.columns.join("\0") ?? ""),
+    comment: (from.comment ?? "") !== (to.comment ?? ""),
     addedUniques: uniques.added,
     droppedUniques: uniques.dropped,
     addedIndexes: indexes.added,
@@ -110,6 +113,7 @@ function tableChange(provider: MigrationProvider, from: DbTable, to: DbTable): T
     change.droppedColumns.length ||
     change.alteredColumns.length ||
     change.primaryKey ||
+    change.comment ||
     change.addedUniques.length ||
     change.droppedUniques.length ||
     change.addedIndexes.length ||
@@ -227,6 +231,9 @@ function summarize(created: DbTable[], dropped: DbTable[], changed: TableChange[
     }
     if (c.primaryKey) {
       lines.push("  [*] Changed the primary key");
+    }
+    if (c.comment) {
+      lines.push("  [*] Changed the table comment");
     }
     for (const u of c.addedUniques) {
       lines.push(`  [+] Added unique constraint on columns ${cols(u.columns)}`);

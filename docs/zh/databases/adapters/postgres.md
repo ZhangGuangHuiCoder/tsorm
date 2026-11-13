@@ -44,6 +44,7 @@ description: PostgreSQL 适配器基于 pg，使用连接池、可配置的 sche
 - 所有标识符限制在 63 个 UTF-8 字节以内，以避免被静默截断后重名。
 - 索引大小仍受 PostgreSQL 实际索引条目大小限制。
 - 排序显式使用 `ASC NULLS FIRST` 和 `DESC NULLS LAST`。
+- `//` 注释生成为 `COMMENT ON COLUMN` / `COMMENT ON TABLE` 语句；迁移能跟踪注释变更。
 - `LIKE` 遵循 PostgreSQL 的大小写语义。
 
 ## 示例

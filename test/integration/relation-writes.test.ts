@@ -354,6 +354,47 @@ eachDatabase("relation writes", (ctx) => {
     await expectOrmError(ctx.db.account.forceDelete({ where: { id: account.id } }), "FOREIGN_KEY_CONSTRAINT");
   });
 
+  // 显式 onDelete: Restrict 阻止删除仍被引用的父记录，解除引用后可删
+  test("explicit onDelete Restrict blocks deleting a referenced parent", async () => {
+    const parent = await ctx.db.restrictParent.create({
+      data: { name: "p", children: { create: {} } },
+    });
+    await expectOrmError(ctx.db.restrictParent.delete({ where: { id: parent.id } }), "FOREIGN_KEY_CONSTRAINT");
+    expect(await ctx.db.restrictChild.count()).toBe(1);
+    await ctx.db.restrictChild.deleteMany({ where: { parentId: parent.id } });
+    await ctx.db.restrictParent.delete({ where: { id: parent.id } });
+    expect(await ctx.db.restrictParent.count()).toBe(0);
+  });
+
+  // onDelete: NoAction 同样阻止删除仍被引用的父记录
+  test("onDelete NoAction blocks deleting a referenced parent", async () => {
+    const parent = await ctx.db.noActionParent.create({
+      data: { name: "p", children: { create: {} } },
+    });
+    await expectOrmError(ctx.db.noActionParent.delete({ where: { id: parent.id } }), "FOREIGN_KEY_CONSTRAINT");
+    expect(await ctx.db.noActionChild.count()).toBe(1);
+    await ctx.db.noActionChild.deleteMany({ where: { parentId: parent.id } });
+    await ctx.db.noActionParent.delete({ where: { id: parent.id } });
+    expect(await ctx.db.noActionParent.count()).toBe(0);
+  });
+
+  // onUpdate: Cascade 在自然键主键变更时同步更新子记录外键（参照动作由数据库执行，raw SQL 同样生效）
+  test("onUpdate Cascade propagates a natural key change to children", async () => {
+    const mysqlLike = ctx.target === "mysql" || ctx.target === "mariadb";
+    await ctx.db.keyedParent.create({ data: { code: "old", children: { create: {} } } });
+    if (mysqlLike) {
+      await ctx.db.$executeRaw`UPDATE \`app_KeyedParent\` SET code = ${"new"} WHERE code = ${"old"}`;
+    } else {
+      await ctx.db.$executeRaw`UPDATE "app_KeyedParent" SET code = ${"new"} WHERE code = ${"old"}`;
+    }
+    const children = await ctx.db.keyedChild.findMany();
+    expect(
+      children.map((c) => {
+        return c.parentCode;
+      }),
+    ).toEqual(["new"]);
+  });
+
   // 自关联父记录删除后子记录 parentId 置空
   test("self relation parent SetNull on delete", async () => {
     const root = await ctx.db.category.create({

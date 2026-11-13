@@ -2,6 +2,23 @@
   "name": "@ofis/tsorm",
   "version": "0.0.2",
   "description": "A type-safe TypeScript ORM with one API for SQLite, MySQL/MariaDB and PostgreSQL",
+  "keywords": [
+    "database",
+    "mariadb",
+    "migrations",
+    "mysql",
+    "orm",
+    "postgres",
+    "postgresql",
+    "query-builder",
+    "relations",
+    "schema",
+    "sql",
+    "sqlite",
+    "type-safe",
+    "typescript"
+  ],
+  "homepage": "https://tsorm.js.org",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -28,10 +45,10 @@
   },
   "scripts": {
     "build": "bun scripts/build.ts",
+    "clean": "bun scripts/clean.ts && bunx oxfmt .",
     "docs": "vitepress dev docs",
     "example": "bun scripts/example.ts",
     "release": "bun scripts/release.ts",
-    "clean": "bun scripts/clean.ts && bunx oxfmt .",
     "test": "docker compose -f examples/compose.yaml up -d --wait && bun test"
   },
   "dependencies": {

@@ -21,7 +21,7 @@
 
 ## Documentation
 
-- [Documentation site](https://zhangguanghuicoder.github.io/tsorm/) · [中文文档站](https://zhangguanghuicoder.github.io/tsorm/zh/)
+- [Documentation site](https://tsorm.js.org/) · [中文文档站](https://tsorm.js.org/zh/)
 - [Documentation Map](docs/guide/documentation.md) · [中文文档导航](docs/zh/guide/documentation.md)
 
 ## Install

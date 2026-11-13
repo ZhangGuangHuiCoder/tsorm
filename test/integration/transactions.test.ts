@@ -180,14 +180,19 @@ eachDatabase("transactions", (ctx) => {
   // 原生 SQL 也参与事务
   test("raw queries participate in the transaction", async () => {
     const user = await makeUser(ctx.db, { name: "raw" });
-    const table = ctx.target === "mysql" || ctx.target === "mariadb" ? "`User`" : '"User"';
-    await ctx.db
+    const table = ctx.target === "mysql" || ctx.target === "mariadb" ? "`app_User`" : '"app_User"';
+    const caught = await ctx.db
       .$transaction(async (tx) => {
         await tx.$executeRaw`DELETE FROM ${rawIdent(table)} WHERE id = ${user.id}`;
         expect(await tx.user.count()).toBe(0);
         throw new Error("undo");
       })
-      .catch(() => {});
+      .catch((e) => {
+        return e;
+      });
+    // 回滚必须由主动抛出的 undo 触发，而非 SQL 失败（否则表名错误时用例会在吞错后空转通过）
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.message).toBe("undo");
     expect(await ctx.db.user.count()).toBe(1);
   });
 

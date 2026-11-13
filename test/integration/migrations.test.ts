@@ -283,6 +283,41 @@ for (const target of targets) {
       expect((await push({ ...options, force: true })).changed).toBeTrue();
     });
 
+    // 注释写入数据库并参与迁移：MySQL/PostgreSQL 支持，SQLite 忽略
+    test("comments round-trip through migrate", async () => {
+      const supports = target !== "sqlite";
+      const C1 = `// 笔记表
+model Note {
+  id: int @id @auto // 主键
+  title: string // 标题
+}
+`;
+      writeSchema(C1);
+      await migrate({ ...options, name: "init" });
+      expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
+
+      // 修改注释：支持的数据库生成变更，SQLite 视为无变化
+      await nextSecond();
+      const C2 = C1.replace("// 标题", "// 新标题").replace("// 笔记表", "// 新笔记表");
+      writeSchema(C2);
+      const result = await migrate({ ...options, name: "comments" });
+      if (supports) {
+        const sql = readFileSync(join(dir, "migrations", result.migration + ".sql"), "utf8");
+        expect(sql).toContain("新标题");
+        expect(sql).toContain("新笔记表");
+      } else {
+        expect(result.migration).toBeUndefined();
+      }
+      expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
+
+      // 删除注释后依然一致
+      await nextSecond();
+      const C3 = C2.replaceAll(/\/\/[^\n]*/g, "");
+      writeSchema(C3);
+      await migrate({ ...options, name: "drop comments" });
+      expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
+    });
+
     /** 以“其他系统”的身份直接执行 SQL，返回查询结果。 */
     const foreign = async (sql: string) => {
       const p = await providerFor(box.url);
@@ -299,17 +334,17 @@ for (const target of targets) {
       try {
         return Object.keys((await p.introspect(conn)).tables)
           .filter((name) => {
-            return name.startsWith("wp_");
+            return name.startsWith("legacy_");
           })
           .sort();
       } finally {
         await conn.close();
       }
     };
-    const IGNORED = 'ignore ["wp_*"]\n';
+    const IGNORED = 'ignore ["legacy_*"]\n';
     const createForeign = async () => {
-      await foreign("CREATE TABLE wp_options (id INT PRIMARY KEY, val VARCHAR(20))");
-      await foreign("INSERT INTO wp_options (id, val) VALUES (1, 'kept')");
+      await foreign("CREATE TABLE legacy_options (id INT PRIMARY KEY, val VARCHAR(20))");
+      await foreign("INSERT INTO legacy_options (id, val) VALUES (1, 'kept')");
     };
 
     // 不声明 ignore 时，其他系统的表会被视为漂移
@@ -329,11 +364,11 @@ for (const target of targets) {
       const result = await migrate(options);
       expect(result.reset).toBeFalse();
       expect(result.migration).toBeDefined();
-      expect(readFileSync(join(dir, "migrations", result.migration + ".sql"), "utf8")).not.toContain("wp_");
+      expect(readFileSync(join(dir, "migrations", result.migration + ".sql"), "utf8")).not.toContain("legacy_");
       expect((await diff({ ...options, from: "database", to: "schema" })).diff.empty).toBeTrue();
       expect((await diff({ ...options, from: "migrations", to: "database" })).diff.empty).toBeTrue();
       expect((await push(options)).changed).toBeFalse();
-      expect(await foreignTables()).toEqual(["wp_options"]);
+      expect(await foreignTables()).toEqual(["legacy_options"]);
     });
 
     // migrate --reset 与 push --reset 只清空本系统的表
@@ -343,10 +378,10 @@ for (const target of targets) {
       await createForeign();
       const result = await migrate({ ...options, reset: true, force: true });
       expect(result.reset).toBeTrue();
-      expect(await foreignTables()).toEqual(["wp_options"]);
+      expect(await foreignTables()).toEqual(["legacy_options"]);
       await push({ ...options, reset: true });
-      expect(await foreignTables()).toEqual(["wp_options"]);
-      const rows = await foreign("SELECT val FROM wp_options");
+      expect(await foreignTables()).toEqual(["legacy_options"]);
+      const rows = await foreign("SELECT val FROM legacy_options");
       expect(
         rows.map((r) => {
           return r.val;
@@ -364,7 +399,7 @@ for (const target of targets) {
         const p = await providerFor(fresh.url);
         const { conn } = await p.connectOrCreate(p.parseDatasource(fresh.url, dir));
         try {
-          await conn.query("CREATE TABLE wp_users (id INT PRIMARY KEY)");
+          await conn.query("CREATE TABLE legacy_users (id INT PRIMARY KEY)");
         } finally {
           await conn.close();
         }

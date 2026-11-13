@@ -44,6 +44,7 @@ The adapter sets `search_path`, the UTC timezone, and `standard_conforming_strin
 - All identifiers are limited to 63 UTF-8 bytes to avoid silent truncation causing name collisions.
 - Index size is still bound by PostgreSQL's actual index entry size limit.
 - Non-unique relation columns are indexed explicitly: foreign keys and polymorphic id columns alike.
+- `//` comments render as `COMMENT ON COLUMN` / `COMMENT ON TABLE` statements; migrations track comment changes.
 - Ordering explicitly uses `ASC NULLS FIRST` and `DESC NULLS LAST`.
 - `LIKE` follows PostgreSQL's case semantics.
 

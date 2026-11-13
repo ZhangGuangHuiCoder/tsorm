@@ -33,6 +33,7 @@ On connect, `PRAGMA foreign_keys=ON` is enabled and `busy_timeout` is set to 500
 - Bigint results use decimal strings. Model `int` fields are converted after a safe-integer range check.
 - `datetime` stores local time as text; `timestamp` stores Unix milliseconds as an integer. Both are decoded according to `datetimeFormat`, see [Date & Timezone](../../client/datetime.md).
 - `string` columns are length-checked by a `CHECK` constraint, 191 characters when the length is omitted, and can be indexed. `text` columns are plain `TEXT` with no length check, and cannot be keys or indexed. Every non-unique relation column, foreign keys and polymorphic id columns alike, gets an index automatically.
+- SQLite has no comment storage; `//` comments are accepted but ignored.
 
 ## Example
 

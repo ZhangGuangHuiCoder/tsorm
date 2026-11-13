@@ -48,6 +48,7 @@ MySQL 8.4 defaults to `caching_sha2_password`. Production should configure TLS o
 - `datetime` years must be between 1000 and 9999; integer `timestamp` storage is not subject to this DATETIME limit.
 - Bigint results use decimal strings. Model `int` fields are converted after a safe-integer range check.
 - Non-unique relation columns are indexed explicitly, so the index does not depend on InnoDB creating one for a foreign key.
+- `//` comments render as inline `COMMENT` clauses on columns and tables; migrations apply comment changes with `ALTER TABLE`.
 
 ## Example
 

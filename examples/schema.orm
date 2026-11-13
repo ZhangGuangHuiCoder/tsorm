@@ -1,9 +1,10 @@
 // 特性示例：关联动作、自关联（树 + 多对多）、显式与隐式多态、复合唯一键、
-// 索引、名称映射、uuid 主键、常用标量、类型化 JSON 与软删除。
+// 索引、名称映射、注释、uuid 主键、常用标量、类型化 JSON 与软删除。
 
+// 用户表
 model User {
   id: int @id @auto
-  email: string @unique
+  email: string @unique // 登录邮箱
   name?: string
   role: "admin" | "member" = "member"
   createdAt: datetime = now()
@@ -15,9 +16,10 @@ model User {
   attachments: Attachment[] @via(owner)
 }
 
+// 文章
 model Post {
   id: int @id @auto
-  title: string(200)
+  title: string(200) // 标题
   body?: text
   published: boolean = false
   views: int = 0
@@ -25,6 +27,7 @@ model Post {
   tags: Tag[]
   attachments: Attachment[] @via(owner)
   notes: Note[] @via(holder)
+
   @@index(published)
 }
 
@@ -56,12 +59,14 @@ model Slot {
 }
 
 // uuid 主键、@map/@@map 名称映射、decimal/bigint/bytes 标量。
+// 商品
 model Product {
   id: string(36) = uuid() @id
   sku: string(32) @unique @map("product_sku")
-  price: decimal(10, 2)
+  price: decimal(10, 2) // 单价
   stock: bigint = 0
   payload?: bytes
+
   @@map("products")
 }
 

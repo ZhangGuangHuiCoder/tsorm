@@ -1,5 +1,5 @@
 ---
-description: Composite constraints and keys, indexes, name mapping, and soft delete in schema.orm.
+description: Composite constraints and keys, indexes, name mapping, comments, and soft delete in schema.orm.
 ---
 
 # Model Attributes
@@ -159,6 +159,20 @@ model Account {
 ```
 
 Migrations follow database names: renaming a field while keeping `@map` produces no migration, while changing the `@map` value drops the old column and adds a new one. Raw SQL must use the database names.
+
+## Comments
+
+`//` comments are stored in the database: comment lines immediately before a model become the table comment, and a trailing comment on a field line becomes the column comment:
+
+```ts
+// Notes table
+model Note {
+  id: int @id @auto // Primary key
+  title: string // Title
+}
+```
+
+Consecutive comment lines before a model are joined with newlines. Standalone comment lines between fields and `/* */` block comments are not stored. A trailing comment on a relation field describes the generated foreign key column. Comments are limited to 1024 characters. MySQL and PostgreSQL persist comments, and migrations track comment changes; SQLite has no comment storage and ignores them.
 
 ## Soft Delete
 

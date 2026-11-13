@@ -93,6 +93,9 @@ export function columnChanges(a: DbColumn, b: DbColumn, compareDefinition: boole
   if (a.auto !== b.auto) {
     changes.push("autoincrement");
   }
+  if ((a.comment ?? "") !== (b.comment ?? "")) {
+    changes.push("comment");
+  }
   if (compareDefinition && !changes.length && a.definition !== b.definition) {
     changes.push("definition");
   }

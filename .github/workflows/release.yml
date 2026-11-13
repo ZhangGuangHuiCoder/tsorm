@@ -24,7 +24,7 @@ jobs:
       # 构建 ORM、扩展与文档，再用四种数据库测试；失败时输出容器日志
       - name: Build & Test
         env:
-          DOCS_BASE: /${{ github.event.repository.name }}/
+          DOCS_BASE: /
           TEST_DATABASES: sqlite,postgres,mysql,mariadb
         run: |
           bun install --frozen-lockfile

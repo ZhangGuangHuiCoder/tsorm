@@ -1,5 +1,5 @@
 import { fail } from "./errors.js";
-/** Query parameters keep their URL type: booleans, integers, everything else stays a string. */
+/** Query parameters keep their URL type: booleans and safe integers are typed; everything else stays a string. */
 export function parameterValue(value: string): unknown {
   if (value === "true") {
     return true;
@@ -8,7 +8,8 @@ export function parameterValue(value: string): unknown {
     return false;
   }
   if (/^\d+$/.test(value)) {
-    return Number(value);
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value;
   }
   return value;
 }
@@ -33,6 +34,13 @@ export function connectionURL(value: unknown, protocols: string[]): URL {
 }
 export function mysqlConnection(value: unknown) {
   const url = connectionURL(value, ["mysql:", "mariadb:"]);
+  const decode = (part: string): string => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      return fail("Invalid connection URL");
+    }
+  };
   const options: Record<string, any> = {};
   for (const [key, val] of url.searchParams) {
     if (["host", "port", "user", "password", "database", "socketPath", "uri"].includes(key)) {
@@ -44,8 +52,8 @@ export function mysqlConnection(value: unknown) {
     ...options,
     host: url.hostname.replace(/^\[|\]$/g, ""),
     port: Number(url.port || 3306),
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    database: decodeURIComponent(url.pathname.slice(1)),
+    user: decode(url.username),
+    password: decode(url.password),
+    database: decode(url.pathname.slice(1)),
   };
 }

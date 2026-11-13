@@ -104,7 +104,7 @@ model User {
 用顶层 `ignore` 声明不归本模型管理的表，迁移命令会完全跳过它们：
 
 ```ts
-ignore ["wp_*", "audit_log"]
+ignore ["legacy_*", "misc"]
 
 model User {
   id: int @id @auto

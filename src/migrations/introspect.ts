@@ -11,6 +11,8 @@ export interface DbColumn {
   auto: boolean;
   /** Full column definition used when rendering DDL. */
   definition: string;
+  /** Column comment, when the database stores one. */
+  comment?: string;
 }
 export interface DbConstraint {
   name: string;
@@ -41,6 +43,8 @@ export interface DbTable {
   foreignKeys: DbForeignKey[];
   /** Full CREATE TABLE text as the provider captures it. */
   definition: string;
+  /** Table comment, when the database stores one. */
+  comment?: string;
 }
 export interface DbModel {
   provider: MigrationProvider;

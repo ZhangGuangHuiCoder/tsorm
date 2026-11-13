@@ -607,6 +607,8 @@ function initialDDL(p: MigrationProvider, schema: Schema): DiffResult {
       comment = "CreateTable";
     } else if (sql.startsWith("CREATE INDEX")) {
       comment = "CreateIndex";
+    } else if (sql.startsWith("COMMENT ON")) {
+      comment = "Comment";
     }
     const head = sections.length ? "\n" : "";
     sections.push(comment === current ? sql : `${head}-- ${comment}\n${sql}`);

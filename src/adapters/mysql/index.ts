@@ -82,7 +82,7 @@ const sqlType = (c: Column) => {
     bytes: "LONGBLOB",
   }[c.type];
 };
-const literal = (v: any) => {
+export const literal = (v: any) => {
   if (v === null) {
     return "NULL";
   }
@@ -150,6 +150,9 @@ export function mysqlSchemaSQL(schema: Schema): string[] {
           s += " DEFAULT " + (d !== null && (c.type === "text" || (c.type === "string" && !c.maxLength)) ? "(" + literal(d) + ")" : literal(d));
         }
       }
+      if (c.comment) {
+        s += ` COMMENT ${literal(c.comment)}`;
+      }
       if (c.enum) {
         for (const value of c.enum) {
           encode(c, value);
@@ -176,7 +179,7 @@ export function mysqlSchemaSQL(schema: Schema): string[] {
         defs.push(`INDEX ${q(indexName(objectName(t), r.source, "relidx"))} (${col(r.source)})`);
       }
     }
-    tables.push(`CREATE TABLE ${q(tableName(t))} (${defs.join(", ")}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`);
+    tables.push(`CREATE TABLE ${q(tableName(t))} (${defs.join(", ")}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin${t.comment ? ` COMMENT=${literal(t.comment)}` : ""}`);
     for (const r of Object.values(t.relations)) {
       if (r.owner && !r.many && !r.polymorphic) {
         const target = schema.tables[r.target];

@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { generateClient, ignoredTable, parseSchema, SchemaError, tableName, type Schema } from "../../src/schema/index.js";
+import { generateClient, ignoredTable, parseSchema, schemaErrors, SchemaError, tableName, type Schema } from "../../src/schema/index.js";
 import { encode } from "../../src/shared/scalars.js";
 import { OrmError } from "../../src/index.js";
 import { mysqlSchemaSQL } from "../../src/adapters/mysql/index.js";
@@ -73,6 +73,22 @@ describe("parseSchema", () => {
       nullable: true,
     });
     expect(schema.jsonTypes?.Settings).toBeDefined();
+  });
+
+  // 夹具声明全局前缀与忽略模式，且任何模型表或中间表都不落在忽略范围内
+  test("the fixture declares a prefix and ignore patterns that match no model table", () => {
+    expect(schema.prefix).toBe("app_");
+    expect(schema.ignore).toEqual(["legacy_*", "misc"]);
+    const ignored = ignoredTable(schema.ignore);
+    const physical = Object.values(schema.tables).flatMap((t) => {
+      return [
+        tableName(t),
+        ...Object.values(t.relations).flatMap((r) => {
+          return r.junction ? [r.junction] : [];
+        }),
+      ];
+    });
+    expect(physical.filter(ignored)).toEqual([]);
   });
 
   // 语法错误带行号和列号
@@ -236,28 +252,28 @@ describe("prefix", () => {
 describe("ignore", () => {
   // 顶层 ignore 声明其他系统的表，可多次出现并合并
   test("collects patterns from every ignore statement", () => {
-    const schema = parseSchema('ignore ["wp_*", "audit_log"]\nmodel User {\n  id: int @id @auto\n}\nignore ["legacy"];');
-    expect(schema.ignore).toEqual(["wp_*", "audit_log", "legacy"]);
+    const schema = parseSchema('ignore ["legacy_*", "misc"]\nmodel User {\n  id: int @id @auto\n}\nignore ["shared"];');
+    expect(schema.ignore).toEqual(["legacy_*", "misc", "shared"]);
     expect(parseSchema("model User {\n  id: int @id @auto\n}").ignore).toBeUndefined();
   });
 
   // * 匹配任意字符，其余字符（包括正则元字符）按字面匹配，不区分大小写
   test("matches * as a wildcard and everything else literally", () => {
-    const ignored = ignoredTable(["wp_*", "a.b", "*_log"]);
-    expect(["wp_posts", "WP_Posts", "wp_", "a.b", "AUDIT_LOG"].filter(ignored)).toEqual(["wp_posts", "WP_Posts", "wp_", "a.b", "AUDIT_LOG"]);
-    expect(["axb", "wp", "log_x"].some(ignored)).toBeFalse();
+    const ignored = ignoredTable(["legacy_*", "a.b", "*_misc"]);
+    expect(["legacy_posts", "LEGACY_Posts", "legacy_", "a.b", "DATA_MISC"].filter(ignored)).toEqual(["legacy_posts", "LEGACY_Posts", "legacy_", "a.b", "DATA_MISC"]);
+    expect(["axb", "legacy", "misc_x"].some(ignored)).toBeFalse();
     expect(ignoredTable(undefined)("anything")).toBeFalse();
   });
 
   // 模型表、@@map 和隐式多对多中间表都不能落在忽略范围内
   test.each([
     ["a model table", 'ignore ["User"]\nmodel User {\n  id: int @id @auto\n}', "Table User matches an ignore pattern"],
-    ["a mapped table", 'ignore ["wp_*"]\nmodel User {\n  id: int @id @auto\n  @@map("wp_users")\n}', "Table wp_users matches an ignore pattern"],
+    ["a mapped table", 'ignore ["legacy_*"]\nmodel User {\n  id: int @id @auto\n  @@map("legacy_users")\n}', "Table legacy_users matches an ignore pattern"],
     ["a junction table", 'ignore ["_*"]\nmodel Post {\n  id: int @id @auto\n  tags: Tag[]\n}\nmodel Tag {\n  id: int @id @auto\n  posts: Post[] @via(tags)\n}', "matches an ignore pattern"],
     ["an empty list", "ignore []", "ignore requires a non-empty list"],
     ["a non-string entry", "ignore [1]", "ignore requires a non-empty list"],
     ["an empty pattern", 'ignore [""]', "ignore requires a non-empty list"],
-    ["a bare string", 'ignore "wp_*"', "ignore requires a non-empty list"],
+    ["a bare string", 'ignore "legacy_*"', "ignore requires a non-empty list"],
     ["a duplicate pattern", 'ignore ["a", "A"]', "Duplicate ignore pattern A"],
     ["a table differing only in case", 'ignore ["user"]\nmodel User {\n  id: int @id @auto\n}', "Table User matches an ignore pattern"],
   ])("rejects %s", (_, text, message) => {
@@ -328,10 +344,10 @@ describe("schema DDL", () => {
   // SQLite 建表语句
   test("SQLite DDL", () => {
     const sql = sqliteSchemaSQL(schema).join("\n");
-    expect(sql).toContain('CREATE TABLE "User"');
-    expect(sql).toContain('CREATE TABLE "products"');
+    expect(sql).toContain('CREATE TABLE "app_User"');
+    expect(sql).toContain('CREATE TABLE "app_products"');
     expect(sql).toContain('"product_sku"');
-    expect(sql).toContain('"_Post_tags"');
+    expect(sql).toContain('"app__Post_tags"');
     expect(sql).toMatch(/json_valid/);
     expect(sql).toMatch(/ON DELETE CASCADE/i);
     expect(sql).toMatch(/ON DELETE SET NULL/i);
@@ -348,7 +364,7 @@ describe("schema DDL", () => {
   // MySQL 建表语句
   test("MySQL DDL", () => {
     const sql = mysqlSchemaSQL(schema).join("\n");
-    expect(sql).toContain("CREATE TABLE `User`");
+    expect(sql).toContain("CREATE TABLE `app_User`");
     expect(sql).toMatch(/ENGINE=InnoDB/i);
     expect(sql).toMatch(/utf8mb4_bin/);
   });
@@ -366,7 +382,7 @@ describe("schema DDL", () => {
   // 多态列是普通列：建表语句里没有外键约束
   test("polymorphic tables get no foreign keys", () => {
     const sql = ddl(schema, "sqlite");
-    const attachment = sql.slice(sql.indexOf('CREATE TABLE "Attachment"'), sql.indexOf('CREATE TABLE "Note"'));
+    const attachment = sql.slice(sql.indexOf('CREATE TABLE "app_Attachment"'), sql.indexOf('CREATE TABLE "app_Note"'));
     expect(attachment).toContain('"ownerType"');
     expect(attachment).not.toMatch(/REFERENCES/i);
   });
@@ -374,15 +390,15 @@ describe("schema DDL", () => {
   // 关系列索引与外键约束解耦：外键列与多态 ID 列在三库都建索引
   test("relation columns are indexed in every dialect", () => {
     const sqlite = ddl(schema, "sqlite");
-    expect(sqlite).toContain('CREATE INDEX "Post_authorId_rel_idx" ON "Post" ("authorId")');
-    expect(sqlite).toContain('CREATE INDEX "Attachment_ownerId_rel_idx" ON "Attachment" ("ownerId")');
-    expect(sqlite).toContain('CREATE INDEX "Note_holderId_rel_idx" ON "Note" ("holderId")');
-    expect(sqlite).toContain('CREATE INDEX "_Post_tags_rel_idx" ON "_Post_tags" ("targetId")');
+    expect(sqlite).toContain('CREATE INDEX "app_Post_authorId_rel_idx" ON "app_Post" ("authorId")');
+    expect(sqlite).toContain('CREATE INDEX "app_Attachment_ownerId_rel_idx" ON "app_Attachment" ("ownerId")');
+    expect(sqlite).toContain('CREATE INDEX "app_Note_holderId_rel_idx" ON "app_Note" ("holderId")');
+    expect(sqlite).toContain('CREATE INDEX "app__Post_tags_rel_idx" ON "app__Post_tags" ("targetId")');
     const postgres = ddl(schema, "postgres");
-    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "Post" \("authorId"\)/);
-    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "Attachment" \("ownerId"\)/);
-    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "Note" \("holderId"\)/);
-    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "_Post_tags" \("targetId"\)/);
+    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "app_Post" \("authorId"\)/);
+    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "app_Attachment" \("ownerId"\)/);
+    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "app_Note" \("holderId"\)/);
+    expect(postgres).toMatch(/CREATE INDEX "orm_\w+" ON "app__Post_tags" \("targetId"\)/);
     const mysql = ddl(schema, "mysql");
     expect(mysql).toMatch(/INDEX `orm_\w+` \(`authorId`\)/);
     expect(mysql).toMatch(/INDEX `orm_\w+` \(`ownerId`\)/);
@@ -392,7 +408,7 @@ describe("schema DDL", () => {
 
   // 唯一列已有唯一索引，不再重复建关系列索引
   test("unique relation columns are not indexed twice", () => {
-    expect(ddl(schema, "sqlite")).not.toContain("Profile_userId_rel_idx");
+    expect(ddl(schema, "sqlite")).not.toContain("app_Profile_userId_rel_idx");
   });
 });
 
@@ -629,5 +645,111 @@ model Item {
     expect(models).toBeDefined();
     expect(models).toContain('dateFields:"at" | "ts" | "n"');
     expect(models).not.toContain('"note"');
+  });
+});
+
+describe("schemaErrors", () => {
+  test("valid schema has no errors", () => {
+    expect(schemaErrors(read("schema.orm"))).toEqual([]);
+  });
+  test("collects one error per broken statement and keeps parsing", () => {
+    const errors = schemaErrors("model A { id: int @id @id } model B { id: int @id x: int( } model C { id: int @id }");
+    expect(errors.length).toBe(2);
+    expect(errors[0].message).toContain("Duplicate @id");
+    expect(errors[1].message).toContain("Only string supports a length");
+  });
+  test("semantic error is reported when syntax is valid", () => {
+    const errors = schemaErrors("model A { id: int @id b: B }");
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("Unknown model B");
+  });
+  test("syntax errors suppress cascading semantic errors", () => {
+    const errors = schemaErrors("model A { id: int @id @id } model B { id: int @id a: A }");
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("Duplicate @id");
+  });
+  test("lexical errors are reported", () => {
+    const errors = schemaErrors("model A { id: % }");
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("Unexpected character");
+  });
+  test("recovers across prefix, ignore and type statements", () => {
+    const errors = schemaErrors('prefix "a_" prefix "b_" type T = { x: } ignore [] model A { id: int @id }');
+    expect(errors.length).toBe(3);
+  });
+  test("parseSchema still throws the first error", () => {
+    expect(() => {
+      return parseSchema("model A { id: int @id @id } model B { id: int @id x: int( }");
+    }).toThrow(SchemaError);
+  });
+});
+
+describe("comments", () => {
+  const schema = parseSchema(`// 笔记表
+model Note {
+  id: int @id @auto // 主键
+  title: string // 标题
+}`);
+
+  test("parses column and table comments", () => {
+    expect(schema.tables.Note.columns.id.comment).toBe("主键");
+    expect(schema.tables.Note.columns.title.comment).toBe("标题");
+    expect(schema.tables.Note.comment).toBe("笔记表");
+  });
+
+  test("MySQL renders inline COMMENT on columns and tables", () => {
+    const sql = mysqlSchemaSQL(schema).join("\n");
+    expect(sql).toContain("COMMENT '主键'");
+    expect(sql).toContain("COMMENT '标题'");
+    expect(sql).toContain("COMMENT='笔记表'");
+  });
+
+  test("PostgreSQL renders COMMENT ON statements", () => {
+    const sql = postgresSchemaSQL(schema).join("\n");
+    expect(sql).toContain(`COMMENT ON TABLE "Note" IS '笔记表'`);
+    expect(sql).toContain(`COMMENT ON COLUMN "Note"."id" IS '主键'`);
+    expect(sql).toContain(`COMMENT ON COLUMN "Note"."title" IS '标题'`);
+  });
+
+  test("SQLite ignores comments", () => {
+    const sql = sqliteSchemaSQL(schema).join("\n");
+    expect(sql).not.toContain("主键");
+    expect(sql).not.toContain("笔记表");
+  });
+
+  test("single quotes are doubled in DDL", () => {
+    const s = parseSchema(`// a'b
+model A { id: int @id // it's
+}`);
+    expect(mysqlSchemaSQL(s).join("\n")).toContain("COMMENT 'it''s'");
+    expect(mysqlSchemaSQL(s).join("\n")).toContain("COMMENT='a''b'");
+    expect(postgresSchemaSQL(s).join("\n")).toContain("IS 'a''b'");
+  });
+
+  test("joins consecutive comment lines and skips block or detached comments", () => {
+    const s = parseSchema(`// 第一行
+// 第二行
+model A {
+  id: int @id
+  // 独立行不附着
+  name: string
+}
+/* 块注释不附着 */
+model B { id: int @id }`);
+    expect(s.tables.A.comment).toBe("第一行\n第二行");
+    expect(s.tables.A.columns.id.comment).toBeUndefined();
+    expect(s.tables.A.columns.name.comment).toBeUndefined();
+    expect(s.tables.B.comment).toBeUndefined();
+  });
+
+  test("relation fields comment the generated foreign key", () => {
+    const s = parseSchema(`model A { id: int @id b: B // 外键
+} model B { id: int @id }`);
+    expect(s.tables.A.columns.bId.comment).toBe("外键");
+  });
+
+  test("rejects oversized comments", () => {
+    expect(schemaErrors(`model A { id: int @id // ${"x".repeat(1025)}\n}`)[0].message).toContain("1024");
+    expect(schemaErrors(`// ${"x".repeat(1025)}\nmodel A { id: int @id }`)[0].message).toContain("1024");
   });
 });

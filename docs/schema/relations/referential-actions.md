@@ -36,7 +36,6 @@ With this schema, deleting a user deletes the posts they authored and clears the
 - Primary keys rarely change, so `onUpdate` can usually stay at its default.
 - [Soft delete](../soft-delete.md) only sets a deletion time and triggers no referential action.
 - Join table links are always deleted together with either side.
-- `SetNull` requires an optional relation, because the column has to accept `NULL`.
 - The action applies to the relation as declared; a one-to-one relation uses the same four actions as a one-to-many relation.
 
 ## Next Steps
