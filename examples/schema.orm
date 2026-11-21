@@ -1,0 +1,89 @@
+// 特性示例：关联动作、自关联树、复合唯一键、索引、名称映射、注释、
+// uuid 主键、常用标量、类型化 JSON 与软删除。
+
+// 用户表
+model User {
+  id: int @id @auto
+  email: string @unique // 登录邮箱
+  name?: string
+  role: "admin" | "member" = "member"
+  createdAt: datetime = now()
+  updatedAt: datetime @updatedAt
+  posts: Post[] @via(author)
+  profile?: Profile @via(user)
+}
+
+// 文章
+model Post {
+  id: int @id @auto
+  title: string(200) // 标题
+  body?: text
+  published: boolean = false
+  views: int = 0
+  author: User @relation(onDelete: Cascade)
+  tags: Tag[]
+
+  @@index(published)
+}
+
+model Profile {
+  id: int @id @auto
+  bio: string = ""
+  user: User @unique @relation(onDelete: Cascade)
+}
+
+model Tag {
+  id: int @id @auto
+  name: string @unique
+}
+
+// 自关联树：父可空，父删除时子记录升到根级。
+model Category {
+  id: int @id @auto
+  name: string(64)
+  parent?: Category @relation(onDelete: SetNull)
+  children: Category[] @via(parent)
+}
+
+// 复合唯一键：整组字段一起作为 where 定位。
+model Slot {
+  id: int @id @auto
+  owner: string(64)
+  slot: int
+  @@unique(owner, slot)
+}
+
+// uuid 主键、@map/@@map 名称映射、decimal/bigint/bytes 标量。
+// 商品
+model Product {
+  id: string(36) = uuid() @id
+  sku: string(32) @unique @map("product_sku")
+  price: decimal(10, 2) // 单价
+  stock: bigint = 0
+  payload?: bytes
+
+  @@map("products")
+}
+
+type Preferences = {
+  theme: "light" | "dark"
+  notifications: boolean
+  languages: string[]
+}
+
+model Account {
+  id: int @id @auto
+  email: string @unique
+  preferences?: json<Preferences>
+  deletedAt?: datetime
+  entries: AccountEntry[] @via(account)
+  @@softDelete(deletedAt)
+}
+
+model AccountEntry {
+  id: int @id @auto
+  title: string
+  account: Account
+  deletedAt?: datetime
+  @@softDelete(deletedAt)
+}

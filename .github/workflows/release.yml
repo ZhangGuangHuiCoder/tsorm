@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      # 构建顺带产出 VSIX 与文档站点；显式列出数据库，避免连通性探测导致静默跳过
+      - name: Build & Test
+        env:
+          TEST_DATABASES: sqlite,postgres,mysql,mariadb
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          bun run test
+
+      # 发布 npm 包与 GitHub Release，重跑幂等
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm view "@ofis/tsorm@$VERSION" version >/dev/null 2>&1 || npm publish
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" artifacts/tsorm-vscode.vsix --clobber
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/.vitepress/dist
+
+      - uses: actions/deploy-pages@v4

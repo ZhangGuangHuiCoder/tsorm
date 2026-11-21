@@ -1,0 +1,114 @@
+/* Homepage visual polish: extends the default theme without touching content. */
+
+:root {
+  --tsorm-brand-grad: linear-gradient(120deg, var(--vp-c-brand-1) 0%, var(--vp-c-brand-2) 50%, var(--vp-c-brand-3) 100%);
+}
+
+/* Soft brand glow behind the hero, fading into the page. */
+.VPHome {
+  position: relative;
+}
+
+.VPHome::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 620px;
+  background: radial-gradient(60% 55% at 50% 0%, color-mix(in srgb, var(--vp-c-brand-1) 22%, transparent) 0%, transparent 72%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures {
+  position: relative;
+  z-index: 1;
+}
+
+/* Gradient headline and a lighter tagline. */
+.VPHero .name .clip {
+  background: var(--tsorm-brand-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.VPHero .tagline {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+/* Drop the default blurred image plate, add a colored halo to the logo. */
+.VPHero .image-bg {
+  display: none;
+}
+
+.VPHero .image {
+  filter: drop-shadow(0 16px 32px color-mix(in srgb, var(--vp-c-brand-1) 38%, transparent));
+}
+
+/* Feature cards: soft surface, rounded, hover lift with brand border + glow. */
+.VPFeature {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 16px;
+  background: var(--vp-c-bg-soft);
+  backdrop-filter: blur(6px);
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease,
+    border-color 0.25s ease,
+    background 0.25s ease;
+}
+
+.VPFeature:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--vp-c-brand-1) 55%, var(--vp-c-divider));
+  background: color-mix(in srgb, var(--vp-c-brand-1) 6%, var(--vp-c-bg-soft));
+  box-shadow: 0 20px 44px -16px color-mix(in srgb, var(--vp-c-brand-1) 34%, transparent);
+}
+
+/* Feature icon becomes a large faint watermark sitting in the card background. */
+.VPHome .VPFeature {
+  position: relative;
+  overflow: hidden;
+}
+
+.VPHome .VPFeature .box {
+  position: relative;
+  z-index: 1;
+}
+
+.VPHome .VPFeature .icon {
+  position: absolute;
+  top: -0.75rem;
+  right: -0.75rem;
+  width: 7rem;
+  height: 7rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--vp-c-brand-1);
+  opacity: 0.09;
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+.VPHome .VPFeature:hover .icon {
+  opacity: 0.16;
+  transform: scale(1.06) rotate(-6deg);
+}
+
+.VPHome .VPFeature .icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.VPFeature .title {
+  font-weight: 700;
+  letter-spacing: 0.1px;
+}

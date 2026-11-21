@@ -1,0 +1,74 @@
+{
+  "name": "tsorm",
+  "displayName": "TSORM",
+  "version": "0.1.7",
+  "description": "Language support for TSORM schemas",
+  "categories": [
+    "Formatters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "database",
+    "migrations",
+    "orm",
+    "schema",
+    "sql",
+    "typescript"
+  ],
+  "homepage": "https://tsorm.js.org",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZhangGuangHuiCoder/tsorm.git"
+  },
+  "publisher": "ofis",
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "languages": [
+      {
+        "id": "tsorm",
+        "aliases": [
+          "TSORM",
+          "orm"
+        ],
+        "extensions": [
+          ".orm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tsorm",
+        "scopeName": "source.orm",
+        "path": "./syntaxes/orm.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "TSORM",
+      "properties": {
+        "tsorm.format.completeRelations": {
+          "type": "boolean",
+          "default": true,
+          "description": "格式化时自动补全关系声明（@via、@unique、@relation 绑定与持有方字段）。关闭后格式化只调整排版。"
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[tsorm]": {
+        "editor.defaultFormatter": "ofis.tsorm",
+        "editor.tabSize": 2
+      }
+    }
+  },
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  }
+}

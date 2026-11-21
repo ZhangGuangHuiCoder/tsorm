@@ -1,0 +1,13 @@
+node_modules/
+dist/
+artifacts/
+.cache/
+*.log
+*.zip
+*.vsix
+.vscode/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+examples/client.ts
+test/fixtures/client.ts
+extensions/LICENSE

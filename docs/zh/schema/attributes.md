@@ -1,0 +1,176 @@
+---
+description: schema.orm 的复合约束与主键、索引、名称映射、注释和软删除。
+---
+
+# 模型属性
+
+模型属性写在模型体内，以 `@@` 开头。它们约束的是整张表，而不是单个字段。
+
+## 复合唯一约束与索引
+
+```ts
+model Membership {
+  id: int @id @auto
+  organization: string(64)
+  email: string
+
+  @@unique(organization, email)
+  @@index(email)
+}
+```
+
+- `@@id`、`@@unique`、`@@index` 接受逗号分隔的裸字段名；`@@index([email])` 报 `Field lists take bare names, not brackets`。`@via` 只接受一个持有方关系名，`@@softDelete` 最多接受一个字段名。
+- `string` 省略长度时按 `string(191)` 处理，字符串字段可以直接建索引、加唯一约束或作为字符串主键，无需额外标注，该长度的由来见[为什么 `string` 默认是 191](./overview.md#为什么-string-默认是-191)。`text` 不限长度，不能作为键或索引。
+
+## 复合主键
+
+主键字段不可通过 ORM 更新，包括复合主键的各个组成字段及其绑定关系。需要可变业务标识时，应使用代理主键并将业务字段声明为唯一键。
+
+```ts
+model Membership {
+  account: Account
+  group: Group
+  role: "owner" | "member" = "member"
+
+  @@id(account, group)
+}
+```
+
+- `@@id` 至少包含两个非空字段，可以写关系名，表示对应的外键字段；此时按主键查询需要传入全部字段，例如 `where: { accountId, groupId }`。
+- 复合主键的模型可以引用其他模型，其他模型也可以用 `@via` 声明指向它的反向集合；但它不能作为其他模型外键的目标，也不能参与多对多关系。
+
+## 用代理主键替代复合主键
+
+外键只能引用单字段主键，`@relation(field: ...)` 也只接受一个列名。需要被其他模型通过外键引用时，应采用代理主键：
+
+- 主键用一个没有业务含义的字段：`id: int @id @auto`，或 `bigint`、`string(36) = uuid()`；
+- 原来的组合键写成 `@@unique(...)`，唯一性仍由数据库保证，其他模型通过单列 `id` 引用它。
+
+### 明细行
+
+明细行的业务身份是「订单 + 行号」。把这个组合写成唯一约束，退款只需一个外键列 `lineId`：
+
+```ts
+model Order {
+  id: int @id @auto
+  lines: OrderLine[] @via(order)
+}
+
+model OrderLine {
+  id: int @id @auto
+  order: Order @relation(onDelete: Cascade)
+  lineNo: int
+  quantity: int
+  refunds: Refund[] @via(line)
+
+  @@unique(order, lineNo)
+}
+
+model Refund {
+  id: int @id @auto
+  line: OrderLine
+  amount: decimal(10, 2)
+}
+```
+
+### 带附加字段的关联
+
+隐式多对多的中间表只有两侧的外键。关联包含角色、加入时间等业务属性时，应声明显式关联模型，并通过 `@via` 定义两侧的一对多关系：
+
+```ts
+model User {
+  id: int @id @auto
+  memberships: Membership[] @via(user)
+}
+
+model Group {
+  id: int @id @auto
+  memberships: Membership[] @via(group)
+}
+
+model Membership {
+  id: int @id @auto
+  user: User
+  group: Group
+  role: "owner" | "member" = "member"
+  joinedAt: datetime = now()
+
+  @@unique(user, group)
+}
+```
+
+### 多租户
+
+子模型同时保存租户和父记录，按租户过滤时不需要连表：
+
+```ts
+model Tenant {
+  id: int @id @auto
+  slug: string(64) @unique
+}
+
+model Project {
+  id: int @id @auto
+  tenant: Tenant
+  key: string(16)
+  tasks: Task[] @via(project)
+
+  @@unique(tenant, key)
+}
+
+model Task {
+  id: int @id @auto
+  tenant: Tenant
+  project: Project
+  title: string(200)
+
+  @@index(tenant, project)
+}
+```
+
+::: warning 跨表一致性需要在应用层保证
+改用单列外键后，数据库只检查 `projectId` 存在，不检查 `task.tenantId` 与 `project.tenantId` 是否相同。创建任务时应从项目读出租户写入，不要让调用方分别传入两者。
+:::
+
+## 名称映射
+
+`@map` 和 `@@map` 指定数据库中的列名和表名，客户端中仍然使用模型里的名称：
+
+```ts
+model Account {
+  id: int @id @auto
+  email: string @unique @map("email_address")
+  createdAt: datetime = now() @map("created_at")
+
+  @@map("accounts")
+}
+```
+
+迁移以数据库名称为准：只改模型中的字段名而保持 `@map` 不变时，不产生迁移；修改 `@map` 的值则相当于删除旧列、新增新列。原生 SQL 中要使用数据库名称。
+
+## 注释
+
+`//` 注释会写入数据库：模型前紧邻的注释行作为表注释，字段行尾的注释作为列注释：
+
+```ts
+// 笔记表
+model Note {
+  id: int @id @auto // 主键
+  title: string // 标题
+}
+```
+
+模型前连续的注释行以换行拼接；字段之间独立成行的注释和 `/* */` 块注释不会写入，注释最长 1024 个字符。MySQL 和 PostgreSQL 会保存注释、迁移能跟踪注释变更，SQLite 会直接忽略。
+
+## 软删除
+
+`@@softDelete(字段)` 指定一个可空的 `datetime` 或 `timestamp` 管理字段；`@@softDelete()` 默认使用 `deletedAt`，不存在时补上。声明约束、可见性和关系行为集中见[软删除](./soft-delete.md)。
+
+## 类型声明
+
+顶层 `type` 声明描述 `json<T>` 的值，不属于模型属性；它用于生成类型和运行时 JSON 校验，不改变物理列。声明方式与已有数据的迁移要求见[类型化 JSON](./json.md)。
+
+## 下一步
+
+- [模型与字段](./overview.md)：字段类型、默认值和字段属性
+- [关系](./relations/overview.md)：一对多、一对一、多对多和多态关联
